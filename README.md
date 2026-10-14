@@ -1,55 +1,47 @@
-AI-Powered Interview Simulator
+# AI-Powered Interview Simulator
 
-An AI-powered interview application built with Python, Streamlit, OpenAI, and MySQL that simulates technical interviews and evaluates candidate performance.
+An AI-powered interview application built with **Python, Streamlit, OpenAI, and MySQL** that simulates technical interviews and evaluates candidate performance.
 
-The application allows candidates to either upload their resume (PDF, DOCX, or TXT) for automatic information extraction or manually enter their personal details, skills, experience, target role, and preferred company. Using AI, it generates personalized interview questions, conducts an interactive chat-based interview with five questions, and provides detailed feedback with scores, strengths, weaknesses, expected answers, and actionable improvement suggestions.
+The application allows candidates to upload their resumes (**PDF, DOCX, or TXT**) or manually enter their details, skills, experience, target role, and preferred company. It generates personalized interview questions, conducts an interactive interview with five questions, and provides detailed feedback with scores, strengths, weaknesses, expected answers, and actionable improvement suggestions.
 
-Candidate profiles, interview questions, answers, scores, and feedback are stored in a MySQL database for record keeping.
+Candidate profiles, interview responses, scores, and feedback are stored in a **MySQL database**.
 
-Key Features
+## 🚀 Key Features
 
-Resume Parsing: Extracts candidate information and structures it using an OpenAI model.
+- **Resume Parsing:** Extracts candidate information and structures it using an OpenAI model.
+- **Manual Candidate Setup:** Allows candidates to enter their personal details, skills, experience, job role, seniority level, and preferred company.
+- **Personal Information Detection:** Uses Microsoft Presidio to detect and mask selected personal information.
+- **AI-Powered Interviews:** Generates personalized interview questions and follow-up questions based on candidate profiles and previous answers.
+- **Automated Evaluation:** Provides question-by-question scoring, expected answers, and personalized improvement recommendations.
+- **MySQL Integration:** Stores candidate profiles, interview responses, scores, and feedback.
+- **Performance Monitoring:** Measures execution times for important operations.
+- **Secure Configuration:** Uses Streamlit secrets to manage API keys and database credentials.
 
-Manual Candidate Setup: Supports candidate details, skills, experience, job role, seniority level, and company selection.
+## 🛠️ Tech Stack
 
-Personal Information Detection: Uses Microsoft Presidio to detect and mask selected personal information.
+- **Programming Language:** Python
+- **Frontend:** Streamlit
+- **AI Integration:** OpenAI API
+- **Database:** MySQL
+- **Resume Processing:** PyPDF, python-docx
+- **PII Detection and Anonymization:** Microsoft Presidio
+- **Data Processing:** JSON, Regular Expressions, Hashlib
 
-AI-Powered Interviews: Generates personalized questions and follow-ups based on candidate profiles and previous answers.
+## 🔄 Application Workflow
 
-Automated Evaluation: Provides question-by-question scoring, expected answers, and personalized improvement recommendations.
+1. **Choose Setup Mode:** Upload a resume or enter candidate details manually.
+2. **Process Candidate Information:** Extract or collect candidate details, skills, and experience.
+3. **Generate Interview Questions:** Use AI to create personalized interview questions.
+4. **Conduct the Interview:** Answer five questions through the interactive chat interface.
+5. **Evaluate Performance:** Receive an overall score, detailed feedback, expected answers, and improvement suggestions.
+6. **Save Results:** Store candidate information and interview results in MySQL.
 
-MySQL Integration: Stores candidate profiles, interview responses, scores, and feedback.
+## ⚙️ Configuration
 
-Performance Monitoring: Measures execution times for key operations.
+The application requires an OpenAI API key and MySQL database credentials.
 
-Secure Configuration: Uses Streamlit secrets to manage API keys and database credentials.
+Store these credentials in `.streamlit/secrets.toml` and **never commit this file to GitHub**.
 
-Tech Stack
+## 🎯 Project Objective
 
-Language: Python
-
-Frontend: Streamlit
-
-AI Integration: OpenAI API
-
-Database: MySQL
-
-Resume Processing: PyPDF, python-docx
-
-PII Detection and Anonymization: Microsoft Presidio
-
-Data Processing: JSON, Regular Expressions, Hashlib
-
-Application Workflow
-
-Choose resume upload or manual candidate setup.
-
-Extract or collect candidate information.
-
-Generate personalized interview questions using AI.
-
-Answer five interview questions through the chat interface.
-
-Receive an overall score, detailed evaluation, and improvement suggestions.
-
-Store candidate and interview results in MySQL.
+To provide an interactive, AI-powered interview practice platform that helps candidates assess their technical knowledge, identify areas for improvement, and prepare more effectively for job interviews.
