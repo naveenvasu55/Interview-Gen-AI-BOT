@@ -36,12 +36,6 @@ Candidate profiles, interview responses, scores, and feedback are stored in a **
 5. **Evaluate Performance:** Receive an overall score, detailed feedback, expected answers, and improvement suggestions.
 6. **Save Results:** Store candidate information and interview results in MySQL.
 
-## ⚙️ Configuration
-
-The application requires an OpenAI API key and MySQL database credentials.
-
-Store these credentials in `.streamlit/secrets.toml` and **never commit this file to GitHub**.
-
 ## 🎯 Project Objective
 
 To provide an interactive, AI-powered interview practice platform that helps candidates assess their technical knowledge, identify areas for improvement, and prepare more effectively for job interviews.
