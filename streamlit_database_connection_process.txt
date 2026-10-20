@@ -1,0 +1,418 @@
+Now, what I need is once the feedback is shows I want this to save in a database preferable MySQL with these columns - Name , Email , Phone number , AI Question , User Answer , Score , Feedback. So, now for 1 user the LLM asks 5 question and gives a score so 5 question 5 rows and for these the name , phone , email. score, feedback will be the same. If this is how it is done or suggest how in the real world applications does?
+
+ChatGPT said:
+Your proposed database design is a reasonable starting point. For your Streamlit interview application, you want to save the candidate's details, the five interview questions, their answers, and the final AI-generated evaluation in MySQL once feedback is available.
+
+However, I recommend separating candidate details, interview sessions, and individual question-answer records, as this is easier to maintain in a real-world application.
+
+There is also an important detail in your current code: the feedback is generated from the entire conversation, so the score and feedback are interview-level results, not separate scores for each question.
+
+1. How your data should look
+Suppose a candidate completes one interview containing five questions.
+
+Candidate
+
+Name, email and phone number
+
+One record per candidate, reused across interviews.
+
+Interview session
+
+Candidate ID, overall score, overall feedback, status and date
+
+One record for each completed interview.
+
+Interview responses
+
+Interview ID, question number, AI question and user answer
+
+Five records for a five-question interview.
+
+This is a relational design: the interview session links to one candidate, and each session can have multiple responses.
+
+2. Recommended MySQL database structure
+I would use three tables rather than duplicating the candidate's personal details, score and feedback across five rows.
+
+Table A — candidates
+Stores candidate details.
+
+Column
+
+Purpose
+
+candidate_id
+
+Primary key
+
+name
+
+Candidate name
+
+email
+
+Candidate email
+
+phone
+
+Candidate phone number
+
+Table B — interviews
+Stores the overall result of each interview.
+
+Column
+
+Purpose
+
+interview_id
+
+Primary key
+
+candidate_id
+
+Links to candidate
+
+overall_score
+
+AI-generated score out of 10
+
+overall_feedback
+
+AI-generated evaluation
+
+status
+
+Completed, in progress, etc.
+
+created_at
+
+Interview date and time
+
+Table C — interview_responses
+Stores the five question-answer pairs.
+
+Column
+
+Purpose
+
+response_id
+
+Primary key
+
+interview_id
+
+Links to interview
+
+question_number
+
+1 to 5
+
+ai_question
+
+Question asked by the AI
+
+user_answer
+
+Candidate's answer
+
+The relationship is:
+
+mermaid
+
+erDiagram
+    CANDIDATES ||--o{ INTERVIEWS : takes
+    INTERVIEWS ||--|{ INTERVIEW_RESPONSES : contains
+
+    CANDIDATES {
+        int candidate_id PK
+        varchar name
+        varchar email
+        varchar phone
+    }
+
+    INTERVIEWS {
+        int interview_id PK
+        int candidate_id FK
+        decimal overall_score
+        text overall_feedback
+        varchar status
+        datetime created_at
+    }
+
+    INTERVIEW_RESPONSES {
+        int response_id PK
+        int interview_id FK
+        int question_number
+        text ai_question
+        text user_answer
+    }
+Why this is better: If a candidate completes three interviews, you store the candidate once, the interview results three times, and the responses separately for each session. You avoid duplicating the overall score and feedback five times per interview.
+
+3. Create the tables in MySQL
+Run the following SQL in MySQL Workbench or your MySQL client.
+
+sql
+
+CREATE DATABASE IF NOT EXISTS interview_db;
+
+USE interview_db;
+
+CREATE TABLE candidates (
+    candidate_id INT AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(255),
+    email VARCHAR(320),
+    phone VARCHAR(30),
+    UNIQUE KEY uq_candidate_email (email)
+);
+
+CREATE TABLE interviews (
+    interview_id INT AUTO_INCREMENT PRIMARY KEY,
+    candidate_id INT NOT NULL,
+    overall_score DECIMAL(3,1),
+    overall_feedback TEXT,
+    status VARCHAR(30) NOT NULL DEFAULT 'completed',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    FOREIGN KEY (candidate_id)
+        REFERENCES candidates(candidate_id)
+);
+
+CREATE TABLE interview_responses (
+    response_id INT AUTO_INCREMENT PRIMARY KEY,
+    interview_id INT NOT NULL,
+    question_number INT NOT NULL,
+    ai_question TEXT NOT NULL,
+    user_answer TEXT NOT NULL,
+
+    UNIQUE KEY uq_interview_question
+        (interview_id, question_number),
+
+    FOREIGN KEY (interview_id)
+        REFERENCES interviews(interview_id)
+        ON DELETE CASCADE
+);
+The unique email constraint assumes that email identifies a candidate in your application. In a production system, account IDs or verified candidate IDs are often better identifiers; also account for nullable emails and shared addresses if your workflow permits them.
+
+4. Connect your Streamlit application to MySQL
+Install the connector in your existing Python environment:
+
+powershell
+python -m pip install mysql-connector-python
+Store your database credentials in .streamlit/secrets.toml rather than hardcoding passwords in your Python script.
+
+toml
+[mysql]
+host = "localhost"
+port = 3306
+user = "interview_app"
+password = "YOUR_DATABASE_PASSWORD"
+database = "interview_db"
+For production, use a restricted database account, secret management, encrypted connections where appropriate, and avoid committing secrets to Git.
+
+5. Write a function to save the interview results
+Add this function near the top of your Python file, outside the Streamlit interview and feedback sections.
+
+python
+
+import mysql.connector
+import re
+from decimal import Decimal
+
+
+def save_interview_to_mysql(
+    candidate_data,
+    messages,
+    feedback_text
+):
+    connection = None
+    cursor = None
+
+    try:
+        # Extract the overall score from the feedback
+        score_match = re.search(
+            r"Overall\s+Score\s*:\s*(10(?:\.0)?|[0-9](?:\.\d+)?)",
+            feedback_text,
+            re.IGNORECASE
+        )
+
+        if not score_match:
+            raise ValueError(
+                "Could not extract the overall score."
+            )
+
+        score = Decimal(score_match.group(1))
+
+        if not Decimal("0") <= score <= Decimal("10"):
+            raise ValueError("Score must be between 0 and 10.")
+
+        connection = mysql.connector.connect(
+            host=st.secrets["mysql"]["host"],
+            port=st.secrets["mysql"]["port"],
+            user=st.secrets["mysql"]["user"],
+            password=st.secrets["mysql"]["password"],
+            database=st.secrets["mysql"]["database"]
+        )
+
+        cursor = connection.cursor()
+
+        # 1. Save candidate details
+        name = candidate_data.get("name")
+        email = candidate_data.get("email")
+        phone = candidate_data.get("phone")
+
+        cursor.execute(
+            """
+            INSERT INTO candidates (name, email, phone)
+            VALUES (%s, %s, %s)
+            ON DUPLICATE KEY UPDATE
+                candidate_id = LAST_INSERT_ID(candidate_id),
+                name = VALUES(name),
+                phone = VALUES(phone)
+            """,
+            (name, email, phone)
+        )
+
+        candidate_id = cursor.lastrowid
+
+        # 2. Save the overall interview result
+        cursor.execute(
+            """
+            INSERT INTO interviews (
+                candidate_id,
+                overall_score,
+                overall_feedback,
+                status
+            )
+            VALUES (%s, %s, %s, %s)
+            """,
+            (
+                candidate_id,
+                score,
+                feedback_text,
+                "completed"
+            )
+        )
+
+        interview_id = cursor.lastrowid
+
+        # 3. Pair each AI question with the user's answer
+        responses = []
+        pending_question = None
+
+        for message in messages:
+
+            role = message.get("role")
+            content = message.get("content", "")
+
+            if role == "system":
+                continue
+
+            if role == "assistant":
+
+                # Ignore the fixed completion message
+                if "click on" in content.lower() and \
+                   "get feedback" in content.lower():
+                    continue
+
+                pending_question = content
+
+            elif role == "user" and pending_question:
+
+                responses.append((
+                    interview_id,
+                    len(responses) + 1,
+                    pending_question,
+                    content
+                ))
+
+                pending_question = None
+
+        # 4. Save all question-answer pairs
+        if responses:
+            cursor.executemany(
+                """
+                INSERT INTO interview_responses (
+                    interview_id,
+                    question_number,
+                    ai_question,
+                    user_answer
+                )
+                VALUES (%s, %s, %s, %s)
+                """,
+                responses
+            )
+
+        connection.commit()
+
+        return {
+            "success": True,
+            "candidate_id": candidate_id,
+            "interview_id": interview_id,
+            "responses_saved": len(responses)
+        }
+
+    except Exception:
+        if connection and connection.is_connected():
+            connection.rollback()
+
+        raise
+
+    finally:
+        if cursor:
+            cursor.close()
+
+        if connection and connection.is_connected():
+            connection.close()
+This function assumes each assistant message is the next interview question, except for the fixed completion message. If you later introduce assistant explanations, multiple messages per question, or tool calls, use explicit question IDs or structured turn records instead of inferring pairs from chat history.
+
+Important: Your current resume schema does not include email or phone. Add those fields if you want the parser to extract them, or collect them directly from the candidate. If you mask these values before the LLM call, retain them locally or in your secure token vault; do not expect the LLM to recover the originals.
+
+6. Call the database function after feedback is generated
+In your existing feedback section, you already have:
+
+python
+st.write(feedback_completion.choices[0].message.content)
+Replace that portion with the following pattern:
+
+python
+feedback_text = feedback_completion.choices[0].message.content
+
+st.write(feedback_text)
+
+# Initialize once in your session-state setup
+if "interview_saved" not in st.session_state:
+    st.session_state.interview_saved = False
+
+if not st.session_state.interview_saved:
+
+    try:
+        result = save_interview_to_mysql(
+            candidate_data=st.session_state.candidate_data,
+            messages=st.session_state.messages,
+            feedback_text=feedback_text
+        )
+
+        st.session_state.interview_saved = True
+
+        st.success(
+            f"Interview saved successfully. "
+            f"Responses saved: {result['responses_saved']}"
+        )
+
+    except Exception:
+        st.error(
+            "Could not save the interview. "
+            "Please check the database configuration."
+        )
+        # Log the exception securely on the server
+The interview_saved flag prevents duplicate writes during ordinary Streamlit reruns within the same session. For production, add a durable idempotency mechanism or unique interview-session identifier as well, because session state alone cannot prevent duplicates after a refresh or a new session.
+
+Also, your current feedback-generation code calls the LLM whenever the feedback section reruns. Store the generated feedback in session state when it is first produced so that reruns do not generate a new score or feedback unexpectedly.
+
+7. What if you want exactly the five rows you originally described?
+Your original design can work for a small project: a single table containing candidate details, question, answer, score and feedback would produce five rows, with the score and feedback repeated in each row.
+
+For a production system, I would avoid that duplication. The three-table design above is cleaner because the overall score and feedback belong to the interview session, while the individual questions and answers belong to the response records.
+
+One final improvement: if you want to score each answer independently, generate and store a separate question_score and question_feedback for each response. Keep those distinct from the overall interview score so that you can explain how the final result was calculated.
+
+
