@@ -623,9 +623,3 @@ Being upfront about limitations is a strength in interviews.
 6. **What I'd do next (30 s):** modularise, add tests, Structured Outputs for evaluation, Docker.
 
 ---
-
-## 👤 Author
-
-**<Your Name>** · [LinkedIn](https://www.linkedin.com/in/<your-profile>) · [GitHub](https://github.com/<your-username>)
-
-> ⭐ If you found this project interesting, consider giving it a star!
