@@ -14,28 +14,30 @@
 
 ---
 
+<a id="table-of-contents"></a>
 ## 📑 Table of Contents
 
-1. [Overview](#-overview)
-2. [Demo](#-demo)
-3. [Key Features](#-key-features)
-4. [Tech Stack](#-tech-stack)
-5. [System Architecture](#-system-architecture)
-6. [End-to-End Flow](#-end-to-end-flow)
-7. [Application State Machine](#-application-state-machine)
-8. [Database Design](#-database-design)
-9. [Concurrency, Locking & Data Integrity](#-concurrency-locking--data-integrity)
-10. [Fallbacks & Error Handling](#-fallbacks--error-handling)
-11. [Performance Optimisations](#-performance-optimisations)
-12. [LLM & Prompt Engineering](#-llm--prompt-engineering)
-13. [Security & Privacy](#-security--privacy)
-14. [Project Structure](#-project-structure)
-15. [Getting Started](#-getting-started)
-16. [Design Decisions & Trade-offs](#-design-decisions--trade-offs)
-17. [Known Limitations & Roadmap](#-known-limitations--roadmap)
+1. [Overview](#overview)
+2. [Demo](#demo)
+3. [Key Features](#key-features)
+4. [Tech Stack](#tech-stack)
+5. [System Architecture](#system-architecture)
+6. [End-to-End Flow](#end-to-end-flow)
+7. [Application State Machine](#application-state-machine)
+8. [Database Design](#database-design)
+9. [Concurrency, Locking & Data Integrity](#concurrency-locking--data-integrity)
+10. [Fallbacks & Error Handling](#fallbacks--error-handling)
+11. [Performance Optimisations](#performance-optimisations)
+12. [LLM & Prompt Engineering](#llm--prompt-engineering)
+13. [Security & Privacy](#security--privacy)
+14. [Project Structure](#project-structure)
+15. [Getting Started](#getting-started)
+16. [Design Decisions & Trade-offs](#design-decisions--trade-offs)
+17. [Known Limitations & Roadmap](#known-limitations--roadmap)
 
 ---
 
+<a id="overview"></a>
 ## 🧭 Overview
 
 Ibot simulates a real first-round technical interview:
@@ -51,6 +53,7 @@ Ibot simulates a real first-round technical interview:
 
 ---
 
+<a id="demo"></a>
 ## 🎬 Demo
 
 | Setup | Review your details |
@@ -63,6 +66,7 @@ Ibot simulates a real first-round technical interview:
 
 ---
 
+<a id="key-features"></a>
 ## ✨ Key Features
 
 - 📄 **Multi-format resume ingestion**: PDF, DOCX and TXT.
@@ -78,6 +82,7 @@ Ibot simulates a real first-round technical interview:
 
 ---
 
+<a id="tech-stack"></a>
 ## 🧰 Tech Stack
 
 | Layer | Technology | Why |
@@ -90,7 +95,7 @@ Ibot simulates a real first-round technical interview:
 | Browser helper | `streamlit-js-eval` | Page reload for "Restart Interview". |
 
 ---
-
+<a id="system-architecture"></a>
 ## 🏗️ System Architecture
 
 ```mermaid
@@ -126,12 +131,13 @@ flowchart LR
 
 **Key architectural points**
 
-- **Stateless script, stateful session.** Streamlit re-runs the whole script on every interaction. All progress lives in `st.session_state`, and the UI renders the screen that matches the current stage flags (see the [state machine](#-application-state-machine)).
+- **Stateless script, stateful session.** Streamlit re-runs the whole script on every interaction. All progress lives in `st.session_state`, and the UI renders the screen that matches the current stage flags (see the [state machine](#application-state-machine)).
 - **Process-wide shared resources.** The OpenAI client, the MySQL pool and the Presidio engines are created **once per server process** with `@st.cache_resource` and shared by all users.
 - **Database as the source of truth.** Session state drives the UI, but every important transition (profile saved, interview started, completed or ended, results saved) is persisted and guarded in MySQL.
 
 ---
 
+<a id="end-to-end-flow"></a>
 ## 🔄 End-to-End Flow
 
 ```mermaid
@@ -182,6 +188,7 @@ sequenceDiagram
 
 ---
 
+<a id="application-state-machine"></a>
 ## 🚦 Application State Machine
 
 The UI is a finite-state machine driven by `st.session_state` flags. Only one screen is ever active.
@@ -219,6 +226,7 @@ stateDiagram-v2
 
 ---
 
+<a id="database-design"></a>
 ## 🗄️ Database Design
 
 ```mermaid
@@ -311,6 +319,7 @@ CREATE TABLE interview_responses (
 
 ---
 
+<a id="concurrency-locking--data-integrity"></a>
 ## 🔐 Concurrency, Locking & Data Integrity
 
 This section usually gets the most interest in interviews, because it shows that the app is safe beyond the happy path.
@@ -386,6 +395,7 @@ Every query uses **parameterised placeholders** (`%s`). No user input is ever co
 
 ---
 
+<a id="fallbacks--error-handling"></a>
 ## 🛟 Fallbacks & Error Handling
 
 | Failure | Behaviour |
@@ -408,6 +418,7 @@ Every query uses **parameterised placeholders** (`%s`). No user input is ever co
 
 ---
 
+<a id="performance-optimisations"></a>
 ## ⚡ Performance Optimisations
 
 Every expensive operation is wrapped in a `measure_time()` context manager that logs `[PERFORMANCE] <operation>: <seconds>`, so each optimisation below was measured, not guessed.
@@ -427,6 +438,7 @@ Every expensive operation is wrapped in a `measure_time()` context manager that 
 
 ---
 
+<a id="llm--prompt-engineering"></a>
 ## 🧠 LLM & Prompt Engineering
 
 | Call | API | Reasoning | Streaming | Output control |
@@ -455,6 +467,7 @@ Every expensive operation is wrapped in a `measure_time()` context manager that 
 
 ---
 
+<a id="security--privacy"></a>
 ## 🛡️ Security & Privacy
 
 - **Secrets** (OpenAI key, DB credentials) live in `.streamlit/secrets.toml`, which is **git-ignored**, and are never logged.
@@ -466,6 +479,7 @@ Every expensive operation is wrapped in a `measure_time()` context manager that 
 
 ---
 
+<a id="project-structure"></a>
 ## 📁 Project Structure
 
 ```
@@ -498,6 +512,7 @@ Interview_AI_BOT/
 
 ---
 
+<a id="getting-started"></a>
 ## 🚀 Getting Started
 
 <details>
@@ -512,7 +527,7 @@ cd Interview_AI_BOT
 pip install -r requirements.txt
 ```
 
-**2. Create the database:** run the SQL in [Database Design](#-database-design).
+**2. Create the database:** run the SQL in [Database Design](#database-design).
 
 **3. Add secrets** in `.streamlit/secrets.toml` (git-ignored):
 
@@ -537,6 +552,7 @@ streamlit run interview_app.py
 
 </details>
 
+<a id="design-decisions--trade-offs"></a>
 ## ⚖️ Design Decisions & Trade-offs
 
 Important concepts, with the reasoning behind each choice.
@@ -591,6 +607,7 @@ For an AI prototype, Streamlit gives chat UI, streaming and state management in 
 
 ---
 
+<a id="known-limitations--roadmap"></a>
 ## 🧩 Known Limitations & Roadmap
 
 Being upfront about limitations is a strength in interviews.
@@ -610,11 +627,12 @@ Being upfront about limitations is a strength in interviews.
 
 ---
 
+<a id="how-to-present-this-project-cheat-sheet"></a>
 ## 🎤 How to Present This Project (cheat sheet)
 
 1. **Problem (30 s):** realistic, personalised interview practice with honest, structured feedback.
 2. **Live demo (2 min):** upload a resume → edit a field on the review screen → answer 2–3 questions → show colour-coded feedback → show the rows in MySQL.
-3. **Architecture (1 min):** walk through the [architecture diagram](#-system-architecture) and the [state machine](#-application-state-machine).
+3. **Architecture (1 min):** walk through the [architecture diagram](#system-architecture) and the [state machine](#application-state-machine).
 4. **Hardest problems solved (2 min):**
    - Race-safe profile locking with `SELECT ... FOR UPDATE` + a 2-hour stale window.
    - Exactly-once semantics in a framework that reruns the whole script on every click.
