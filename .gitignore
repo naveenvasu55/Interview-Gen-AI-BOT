@@ -1,6 +1,7 @@
 .streamlit/secrets.toml
 .streamlit/config.toml
 
-interview_app(backup).py
-SQL_Queries.docx
-streamlit_database_connection_process.txt
+/interview_app(backup).py
+/SQL_Queries.docx
+/streamlit_database_connection_process.txt
+/test_db_connection.py
