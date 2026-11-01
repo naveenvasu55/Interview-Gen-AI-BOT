@@ -1,9 +1,14 @@
-# Streamlit configuration
-.streamlit/secrets.toml
-.streamlit/config.toml
+# Secrets - never commit
+/.streamlit/secrets.toml
+
+# Python cache
+__pycache__/
+*.py[cod]
 
 # Files to keep locally, but exclude from GitHub
 /interview_app(backup).py
 /SQL_Queries.docx
 /streamlit_database_connection_process.txt
 /test_db_connection.py
+/test_aiven_connection.py
+*.bak

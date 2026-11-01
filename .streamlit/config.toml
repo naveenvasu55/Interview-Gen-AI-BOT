@@ -1,0 +1,14 @@
+[server]
+# Stops Streamlit scanning your project/venv for file changes.
+# Use "auto" while developing (auto-reload), "none" in production.
+fileWatcherType = "none"
+headless = true
+maxUploadSize = 5          # resume upload limit in MB
+
+[runner]
+# Interrupt a running script immediately when the user clicks again
+fastReruns = true
+
+[browser]
+# Skip sending usage telemetry on every session
+gatherUsageStats = false

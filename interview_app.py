@@ -19,15 +19,13 @@
 #    Streamlit re-runs this ENTIRE file from top to bottom on every user
 #    interaction (button click, text input, etc.). Anything that must
 #    survive between runs is stored in st.session_state.
-#
-#  NOTE: Lines marked "OLD VERSION - kept for reference" are commented-out
-#        code from earlier versions. They are NOT executed.
 # ##########################################################################
 
 
 # ============================================================
 # 1. IMPORT REQUIRED LIBRARIES
 # ============================================================
+from pathlib import Path                           # Paths relative to this file
 from openai import OpenAI                          # OpenAI API client (LLM calls)
 import streamlit as st                             # Web UI framework
 from streamlit_js_eval import streamlit_js_eval    # Run JavaScript in the browser (page reload)
@@ -38,7 +36,6 @@ import re                                          # Regular expressions (valida
 import time                                        # Timing for performance logs
 import hashlib                                     # SHA-256 hash to detect re-uploaded files
 import mysql.connector                             # MySQL database driver
-import re                                          # (duplicate import - harmless)
 from decimal import Decimal                        # Exact decimal numbers for scores
 import secrets                                     # Secure random numbers (public candidate ID)
 
@@ -74,8 +71,10 @@ def measure_time(operation_name):
 #   NOTE: st.set_page_config must be the first Streamlit call.
 # ============================================================
 st.set_page_config(
-    page_title="Ibot",
-    page_icon="AI_Interview_icon.png"
+    page_title="IBot",
+    # Path relative to this file, so it works locally AND in the cloud
+    page_icon=str(Path(__file__).with_name("AI_Interview_icon.png")),
+    layout="wide"
 )
 
 # --------------------------------------------------------
@@ -87,13 +86,13 @@ if "openai_model" not in st.session_state:
 # --------------------------------------------------------
 # 3.2 Page headings
 # --------------------------------------------------------
-st.title("Interview phase")
+st.title("IBot - Inteview Bot")
 st.subheader(
         f"Powered by Gen AI : "
         f"{st.session_state['openai_model']}"
     )
 
-st.caption("Interview powered assistant")
+st.caption("Your AI-Powered Interview Assistant")
 
 # ============================================================
 # 4. TEMPORARY DIAGNOSTIC: CHECK SCRIPT RERUNS
@@ -116,15 +115,6 @@ st.session_state["_run_count"] += 1
 # --------------------------------------------------------
 script_start_time = time.perf_counter()
 
-st.caption(
-    f"Script runs: {st.session_state['_run_count']}"
-)
-
-# --------------------------------------------------------
-# 4.3 TEMPORARY: confirms .streamlit/config.toml is loaded.
-#     Shows "none" or "auto". Remove once verified.
-# --------------------------------------------------------
-st.caption(f"File watcher: {st.get_option('server.fileWatcherType')}")
 
 # ========================================================
 # 5. CREATE OPENAI CLIENT (CACHED)
@@ -145,8 +135,8 @@ def get_openai_client(api_key):
 
 # --------------------------------------------------------
 # 5.0.2 Read the API key and create the client
-#     If the key is missing/empty, client = None and an error
-#     message is shown on the page.
+#     If the key is missing/empty, an error is shown on the page
+#     and the app stops here (nothing below can work without it).
 # --------------------------------------------------------
 try:
     api_key = st.secrets["OPENAI_API_KEY"]
@@ -161,6 +151,7 @@ except Exception as e:
         "OpenAI configuration is missing or invalid. "
         "Please check your application secrets."
     )
+    st.stop()
 
 # ============================================================
 # 5.1 MYSQL CONNECTION POOL (CACHED)
@@ -178,10 +169,18 @@ from mysql.connector import pooling
 # --------------------------------------------------------
 @st.cache_resource(show_spinner=False)
 def get_mysql_pool():
+    """Create the pool once. ssl_* keys in secrets.toml are optional:
+         the cloud database needs them; local MySQL does not."""
     cfg = st.secrets["mysql"]
+
+    ssl_options = {
+        key: cfg[key]
+        for key in ("ssl_ca", "ssl_verify_cert", "ssl_verify_identity")
+        if key in cfg
+    }
     return pooling.MySQLConnectionPool(
         pool_name="ibot_pool",
-        pool_size=10,               # max simultaneous connections
+        pool_size=5,                # free cloud database: keep this small
         pool_reset_session=True,    # clean session state on reuse
         host=cfg["host"],
         port=int(cfg["port"]),
@@ -189,6 +188,7 @@ def get_mysql_pool():
         password=cfg["password"],
         database=cfg["database"],
         connection_timeout=10,      # seconds to wait when connecting
+        **ssl_options,
     )
 
 
@@ -199,10 +199,15 @@ def get_mysql_pool():
 # --------------------------------------------------------
 def get_db_connection():
     conn = get_mysql_pool().get_connection()
-    # Revive the connection if MySQL closed it after being idle
-    conn.ping(reconnect=True, attempts=2, delay=1)
-    return conn
 
+    try:
+        # Revive the connection if MySQL closed it after being idle
+        conn.ping(reconnect=True, attempts=2, delay=1)
+    except Exception:
+        conn.close()   # return the slot to the pool, or the pool runs out
+        raise
+
+    return conn
 # ============================================================================
 # 6. INITIALIZE SESSION STATE VARIABLES
 #   Streamlit reruns the entire Python script whenever the user
@@ -276,7 +281,7 @@ def setup_choose():
 # 8. FUNCTION TO MARK THE SETUP AS COMPLETE
 #   Callback for the "Confirm & Start Interview" button.
 #   From this point the candidate profile is LOCKED.
-#   NOTE: PROFILE_FIELDS is defined later in the file (Section 16.0).
+#   NOTE: PROFILE_FIELDS is defined later in the file (Section 16.1).
 #         That is fine because this function only runs when the
 #         button is clicked, after the whole script has been loaded.
 # =================================================================
@@ -323,7 +328,7 @@ if not st.session_state.choose_setup:
         st.info(
                 """
                 NOTE : If you choose "Manual selection" You have to enter/choose
-                Name , Experience , Skills , Company , level, postion in the next page
+                Name , Experience , Skills , Company , level, position in the next page
                 after selecting Next button.
                 """,
             )
@@ -836,13 +841,12 @@ def save_candidate_profile(
         if cursor:
             cursor.close()
 
-        if connection and connection.is_connected():
+        if connection:
             connection.close()
-
 
 # ============================================================
 # 16.1 CANDIDATE PROFILE HELPERS (review screen: view + edit)
-#   Used by the "Review your details" screen (Section 16.1).
+#   Used by the "Review your details" screen (Section 16.2).
 #   Contains:
 #     - PROFILE_FIELDS        : which fields are shown and how
 #     - value conversion      : experience_years, as_list, ...
@@ -1311,9 +1315,8 @@ if (st.session_state.choose_setup and
               # 17.0.3 (c) Send the resume text to the LLM for parsing
               # ----------------------------------------------------
               with measure_time("OpenAI resume parsing"):
-                # resume_json = parse_resume_with_llm(   (old variable name)
                 candidate_data = parse_resume_with_llm(
-                 resume_text, # Use this when you want to pass the same exact orignial resume data without masking
+                 resume_text, # Use this when you want to pass the same exact original resume data without masking
                  # masked_resume_text, # Use this when you want to pass the masked resume data
                  client
               )
@@ -1380,6 +1383,8 @@ if (st.session_state.choose_setup and
             # 17.0.6 Any failure in 17.0.3 - 17.0.5
             #        Print full traceback to the terminal, show a
             #        friendly error, and stop this run.
+            #        Database failures get their own message: the
+            #        resume is fine, so the user should simply retry.
             # --------------------------------------------------------
             except Exception as e:
               st.session_state.candidate_profile_saved = False
@@ -1391,10 +1396,16 @@ if (st.session_state.choose_setup and
               # Log the error type, not the resume or personal information
               print(f"Resume processing failed: {type(e).__name__}")
 
-              st.error(
-                  "We couldn't save your resume details. "
-                  "Please check the application console for details."
-              )
+              if isinstance(e, mysql.connector.Error):
+                  st.error(
+                      "We couldn't save your profile because the database "
+                      "is unavailable. Please try again shortly."
+                  )
+              else:
+                  st.error(
+                      "We couldn't process your resume. Please make sure it is "
+                      "a text-based PDF, DOCX or TXT file and try again."
+                  )
               st.stop()
 
         # ------------------------------------------------------------
@@ -1422,7 +1433,7 @@ if  (
     # Hide the form once it was submitted; the review screen takes over
     and not st.session_state.get("manual_profile_saved", False)
 ):
-    st.subheader("Personal informaton", divider="rainbow")
+    st.subheader("Personal information", divider="rainbow")
 
     # --------------------------------------------------------
     # 18.0 Initialize default values before creating widgets
@@ -1645,23 +1656,6 @@ if  (
           }
 
           # --------------------------------------------------------------
-          # 18.13 PRINT THE INFORMATION ENTERED BY THE USER TO THE CONSOLE
-          #       (debug output in the terminal only)
-          # --------------------------------------------------------------
-          candidate = st.session_state.candidate_data
-          print("\n========== CANDIDATE INFORMATION ==========")
-          print(f"Name: {candidate['name']}")
-          print(f"Email: {candidate['email']}")
-          print(f"Phone: {candidate['phone']}")
-          print(f"Experience: {candidate['total_experience']}")
-          print(f"Skills: {candidate['skills']}")
-          print(
-                f"Position: {candidate['level']} "
-                f"{candidate['position']} at {candidate['company']}"
-            )
-          print("===========================================\n")
-
-          # --------------------------------------------------------------
           # 18.14 SAVE CANDIDATE PROFILE TO MYSQL
           #   On success -> mark manual_profile_saved and rerun, which
           #   hides this form (see the Section 18 condition).
@@ -1679,7 +1673,6 @@ if  (
              st.session_state.candidate_id = candidate_id
              st.session_state.public_candidate_id = public_id
              st.session_state.candidate_profile_saved = True
-            #  st.session_state.candidate_id = candidate_id   (duplicate - old)
 
              print(
                 "Manual candidate profile saved successfully | "
@@ -1964,12 +1957,12 @@ if (
     # 19.1 Display initial interview greeting
     # --------------------------------------------------------
     candidate_name = (
-    st.session_state.candidate_data.get("name")
+    st.session_state.candidate_data.get("name") or "there"
     )
     st.info(
         f"""
-        Hi {candidate_name}, thank you for appling for this role,
-        very excited to take interview for you.. Here's your first question!
+        Hi {candidate_name}, thank you for applying for this role,
+        we're excited to interview you. Here's your first question!
         """,
         icon="👏"
     )
@@ -1991,46 +1984,47 @@ if (
     # ------------------------------------------------------------------
 
     if not st.session_state.messages:
-        st.session_state.messages = [
-            {
-                "role": "system",
-                "content": build_interview_system_prompt(
-                    st.session_state.candidate_data
-                ),
-            }
-        ]
-   
+        system_message = {
+            "role": "system",
+            "content": build_interview_system_prompt(
+                st.session_state.candidate_data
+            ),
+        }
+
         # ------------------------------------------------------------------------
         # 19.4 GENERATE FIRST INTERVIEW QUESTION (first run only)
         #   The candidate has not answered anything yet, so we ask
         #   OpenAI to generate the first interview question.
         #   reasoning_effort="none" -> fastest response
+        #   messages is saved only after this succeeds, so a failed
+        #   call is simply retried on the next rerun.
         # ------------------------------------------------------------------------
-        with st.spinner("Preparing your interview questions..."):
-         with measure_time("OpenAI first interview question"):
-            first_response = client.chat.completions.create(
-            model=st.session_state["openai_model"],
-            messages=st.session_state.messages,
-            reasoning_effort="none",
-            max_completion_tokens=400
-            )
-
-        # Extract the AI's first question text
-        first_question = (
-            first_response.choices[0].message.content
-        )
+        try:
+            with st.spinner("Preparing your interview questions..."):
+                with measure_time("OpenAI first interview question"):
+                    first_response = client.chat.completions.create(
+                        model=st.session_state["openai_model"],
+                        messages=[system_message],
+                        reasoning_effort="none",
+                        max_completion_tokens=400,
+                    )
+        except Exception as e:
+            print(f"First question failed: {type(e).__name__}")
+            st.error("Could not start the interview. Please refresh and try again.")
+            st.stop()
 
         # ------------------------------------------------------------------
-        # 19.5 SAVE FIRST AI QUESTION
-        #   Must be saved into messages, otherwise when the user
+        # 19.5 SAVE THE SYSTEM MESSAGE AND FIRST QUESTION TOGETHER
+        #   The question must be in messages, otherwise when the user
         #   answers, OpenAI won't know which question was answered.
         # ------------------------------------------------------------------
-        st.session_state.messages.append(
+        st.session_state.messages = [
+            system_message,
             {
                 "role": "assistant",
-                "content": first_question
-            }
-        )
+                "content": first_response.choices[0].message.content,
+            },
+        ]
 
     # ------------------------------------------------------------------
     # 19.6 DISPLAY PREVIOUS CHAT HISTORY
@@ -2048,8 +2042,9 @@ if (
     #   st.chat_input() shows the chat box at the bottom of the page.
     #   When the user submits an answer, the code inside "if prompt:" runs.
     #   The input is hidden once the interview has ended.
+    #   submit_mode="disable" blocks a second answer while the next
+    #   question is streaming (it would cancel the running reply).
     # ------------------------------------------------------------------------------
-    # if not st.session_state.chat_complete:   (old condition)
     if (
     not st.session_state.chat_complete
     and not st.session_state.interview_ended
@@ -2059,6 +2054,7 @@ if (
         "Your answer..",
         max_chars=2000,
         key="interview_chat_input",
+        submit_mode="disable",
      )
 
      if prompt :
@@ -2069,12 +2065,7 @@ if (
             #   (c) Add the answer to the conversation history
             # ------------------------------------------------
 
-            candidate_id = st.session_state.get("candidate_id")
             interview_id = st.session_state.get("interview_id")
-
-            # Debug output in the terminal
-            print("DEBUG candidate_id:", repr(candidate_id))
-            print("DEBUG interview_id:", repr(interview_id))
 
             # (a) No interview row -> cannot continue
             if interview_id is None:
@@ -2127,43 +2118,56 @@ if (
                 # 19.12 GENERATE NEXT INTERVIEW QUESTION
                 #   Sends the whole conversation and streams
                 #   the reply into an assistant chat bubble.
+                #   If this fails, the answer is undone so the
+                #   candidate can send it again.
                 # -----------------------------------------
-               with st.chat_message("assistant"):
-                 with measure_time("OpenAI next interview question"):
-                    stream = client.chat.completions.create(
+                try:
+                    with st.chat_message("assistant"):
+                        with measure_time("OpenAI next interview question"):
+                            stream = client.chat.completions.create(
 
-                        # The selected OpenAI model
-                        model=st.session_state["openai_model"],
+                                # The selected OpenAI model
+                                model=st.session_state["openai_model"],
 
-                        # Send the entire conversation history
-                        messages=[
-                            {
-                                "role": m["role"],
-                                "content": m["content"]
-                            }
-                            for m in st.session_state.messages
-                        ],
+                                # Send the entire conversation history
+                                messages=[
+                                    {
+                                        "role": m["role"],
+                                        "content": m["content"]
+                                    }
+                                    for m in st.session_state.messages
+                                ],
 
-                        # Disable reasoning for this request (fastest)
-                        reasoning_effort="none",
+                                # Disable reasoning for this request (fastest)
+                                reasoning_effort="none",
 
-                        # Limit response length
-                        max_completion_tokens=400,
+                                # Limit response length
+                                max_completion_tokens=400,
 
-                        # Stream the response gradually
-                        stream=True
+                                # Stream the response gradually
+                                stream=True
+                            )
+
+                            # Display the AI response as it is generated
+                            # (returns the full text when finished)
+                            response = st.write_stream(stream)
+
+                except Exception as e:
+                    st.session_state.messages.pop()
+                    st.session_state.user_message_count -= 1
+                    print(f"Next question failed: {type(e).__name__}")
+                    st.error(
+                        "Could not get the next question. "
+                        "Please send your answer again."
                     )
+                    st.stop()
 
-                    # Display the AI response as it is generated
-                    # (returns the full text when finished)
-                    response = st.write_stream(stream)
-
-                 # ------------------------------------------------
-                 # 19.13 SAVE AI RESPONSE TO CHAT HISTORY
-                 #   Saved so it is sent back to OpenAI with the
-                 #   next answer and shown again after reruns.
-                 # ------------------------------------------------
-                    st.session_state.messages.append(
+                # ------------------------------------------------
+                # 19.13 SAVE AI RESPONSE TO CHAT HISTORY
+                #   Saved so it is sent back to OpenAI with the
+                #   next answer and shown again after reruns.
+                # ------------------------------------------------
+                st.session_state.messages.append(
                     {
                         "role": "assistant",
                         "content": response
@@ -2225,16 +2229,27 @@ if (
 
 # ------------------------------------------------------------------
 # 20. INTERVIEW COMPLETION STATUS
-#   Shows a disabled input box with a "completed" message once the
-#   interview is over (replaces the chat input).
+#   Replaces the chat input once the interview is over.
+#   5 answers given -> points to the "Get Feedback" button (Section 21).
+#   Ended early     -> no feedback is available, so it offers a restart.
 # ------------------------------------------------------------------
-if st.session_state.chat_complete:
-      st.text_input(
-        "Interview completed",
-        value="Thank you for the attempt , You have completed all 5 answers. Click on 'Feeback' button to proceed",
-        disabled=True,
-        key="completed_interview_input",
-    )
+if st.session_state.chat_complete and not st.session_state.feedback_shown:
+    if st.session_state.user_message_count >= 5:
+        st.info(
+            "You have completed all 5 answers. "
+            "Click **Get Feedback** to see your results."
+        )
+    else:
+        st.info(
+            "This interview was ended early, so no feedback is available. "
+            "Click **Restart Interview** to start again."
+        )
+        if st.button(
+            "Restart Interview",
+            key="restart_after_early_end",
+            type="primary",
+        ):
+            streamlit_js_eval(js_expressions="parent.window.location.reload()")
 
 # ================================================================
 # 21. GET FEEDBACK BUTTON
@@ -2257,19 +2272,14 @@ if (
 #   Called once after feedback is generated (Section 23).
 #   Steps (all in ONE transaction):
 #     22.1 Extract the overall score from the feedback text
-#     22.2 Update the candidate's phone number
-#     22.3 Verify the interview belongs to this candidate
-#     22.4 Store score + feedback on the interview row
-#     22.5 Pair each AI question with the candidate's answer
-#     22.6 Insert all question/answer pairs
-#     22.7 Commit
+#     22.2 Verify the interview belongs to this candidate
+#     22.3 Store score + feedback on the interview row
+#     22.4 Pair each AI question with the candidate's answer
+#     22.5 Insert all question/answer pairs
+#     22.6 Commit
 # ====================================================================
-import mysql.connector        # (duplicate import - harmless)
-import re                     # (duplicate import - harmless)
-from decimal import Decimal   # (duplicate import - harmless)
 
 def save_interview_to_mysql(
-    candidate_data,
     messages,
     feedback_text
 ):
@@ -2292,7 +2302,7 @@ def save_interview_to_mysql(
             re.IGNORECASE
         )
         if not score_match:
-            print("Feedback received:", repr(feedback_text[:500]))
+            print("Overall score was not found in the feedback text.")
             raise ValueError(
                 "Could not extract the overall score."
                 "Expected format: Overall Score: 0.0/10"
@@ -2312,61 +2322,7 @@ def save_interview_to_mysql(
         cursor = connection.cursor()
 
         # ------------------------------------------------------------
-        # 22.2 Candidate details (phone number update)
-        # ------------------------------------------------------------
-        name = candidate_data.get("name")
-        email = candidate_data.get("email")
-
-        # Get phone number from all supported candidate-data sources
-        candidate_data = candidate_data or {}
-
-        phone = (
-            candidate_data.get("phone_number")
-            or candidate_data.get("phone")
-            or st.session_state.get("phone_number")
-            or st.session_state.get("phone")
-        )
-        company = candidate_data.get("company")
-
-        # Debug BEFORE executing SQL (terminal only)
-        print("Candidate data:", repr(candidate_data))
-        print("Phone value:", repr(phone))
-        print("Phone type:", type(phone).__name__)
-        print("Phone length:", len(str(phone)) if phone is not None else 0)
-
-        # Phone is required -> stop with a clear error if missing
-        if not phone:
-            print("Candidate data received:", repr(candidate_data))
-            print("Session phone_number:", repr(
-               st.session_state.get("phone_number")
-            ))
-            print("Session phone:", repr(st.session_state.get("phone")))
-            raise ValueError(
-                  "Phone number is missing. Check candidate_data and session state."
-            )
-
-        # Reuse the existing candidate ID
-        candidate_id = st.session_state.get("candidate_id")
-
-        if candidate_id is None:
-              raise ValueError("Candidate ID is missing from session state.")
-
-        # Update the existing candidate instead of inserting a duplicate
-        with measure_time("MySQL candidate insert/update"):
-         cursor.execute(
-            """
-            UPDATE candidates
-            SET phone = %s
-            WHERE candidate_id = %s
-            """,
-          (phone, candidate_id)
-        )
-
-        # Keep the existing candidate_id; do not reassign it.
-        print(f"Updated phone for candidate ID: {candidate_id}")
-
-        # ------------------------------------------------------------
-        # 22.3 Verify the interview row belongs to this candidate
+        # 22.2 Verify the interview row belongs to this candidate
         # ------------------------------------------------------------
         interview_id = st.session_state.get("interview_id")
         candidate_id = st.session_state.get("candidate_id")
@@ -2399,7 +2355,7 @@ def save_interview_to_mysql(
             )
 
             # ------------------------------------------------------------
-            # 22.4 Store the score + feedback on the interview row
+            # 22.3 Store the score + feedback on the interview row
             #      ended_at is set only if it was not already set.
             # ------------------------------------------------------------
             cursor.execute(
@@ -2424,7 +2380,7 @@ def save_interview_to_mysql(
             )
 
         # ------------------------------------------------------------
-        # 22.5 Pair each AI question with the user's answer
+        # 22.4 Pair each AI question with the user's answer
         #   Walks through the history: an assistant message becomes
         #   the "pending" question; the next user message is its answer.
         #   Each row: (interview_id, question_number, question, answer)
@@ -2465,9 +2421,8 @@ def save_interview_to_mysql(
         )
 
         # ------------------------------------------------------------
-        # 22.6 Insert all question/answer pairs in one call
+        # 22.5 Insert all question/answer pairs in one call
         # ------------------------------------------------------------
-        # if responses:   (old guard - no longer needed)
         cursor.executemany(
                 """
                         INSERT INTO interview_responses (
@@ -2482,7 +2437,7 @@ def save_interview_to_mysql(
             )
 
         # ------------------------------------------------------------
-        # 22.7 Commit the interview update and responses together
+        # 22.6 Commit the interview update and responses together
         # ------------------------------------------------------------
         with measure_time("MySQL transaction commit"):
              connection.commit()
@@ -2502,11 +2457,11 @@ def save_interview_to_mysql(
         # Always release the cursor and return the connection to the pool
         if cursor:
             cursor.close()
-        if connection and connection.is_connected():
+        if connection:
             connection.close()
 
 # ============================================================
-# 22.0 SCORE COLORING (DETERMINISTIC)
+# 22.7 SCORE COLORING (DETERMINISTIC)
 #   The LLM writes plain scores ("0.0/10", "3/5").
 #   Python then makes ONLY the number bold + colored using
 #   fixed thresholds, so colors are always correct and no
@@ -2518,7 +2473,7 @@ def save_interview_to_mysql(
 # ============================================================
 
 # --------------------------------------------------------
-# 22.0.1 Pick the color for a score
+# 22.7.1 Pick the color for a score
 # --------------------------------------------------------
 def score_color(score, out_of):
     ratio = score / out_of
@@ -2530,7 +2485,7 @@ def score_color(score, out_of):
 
 
 # --------------------------------------------------------
-# 22.0.2 Find score lines and rebuild them
+# 22.7.2 Find score lines and rebuild them
 #   Matches "**Overall Score:** ..." and "**Score:** ..." lines,
 #   finds the X/10 or X/5 value, and replaces the WHOLE rest of
 #   the line with just the bold colored score. This also removes
@@ -2546,7 +2501,7 @@ SCORE_LINE_PATTERN = re.compile(
 )
 
 # --------------------------------------------------------
-# 22.0.3 Add a divider line before every question
+# 22.7.3 Add a divider line before every question
 #   1. Remove any "---" lines the model already wrote
 #      (prevents double dividers).
 #   2. Insert a divider before each "**Question N:**".
@@ -2581,7 +2536,7 @@ def colorize_scores(feedback_text):
     )
 
 # ============================================================
-# 22.1 FEEDBACK PROMPT BUILDER
+# 22.8 FEEDBACK PROMPT BUILDER
 #   Builds the system prompt for the evaluator LLM.
 #   The candidate's experience is inserted so the expected depth
 #   of answers matches their seniority.
@@ -2639,7 +2594,7 @@ def build_feedback_system_prompt(total_experience):
 
         **Candidate Answer:** [Brief, accurate summary of the actual answer. If the candidate skipped the question, explicitly state that no technical answer was provided.]
 
-        **Score:** X/5 and the appropriate color label
+        **Score:** X/5
         Write only the number in this exact format (for example: **Score:** 3.5/5). Do not repeat the word "Score", and do not add colors, color names, or labels.
 
         **Evaluation:** [Specific strengths and shortcomings supported by the candidate's answer.]
@@ -2715,7 +2670,7 @@ if st.session_state.feedback_shown:
                                 "content":(
                                     "This is the interview you need to evaluate. "
                                     "You are only a tool for evaluation and should "
-                                    f"not engage in conversaion : {conversation_history}"
+                                    f"not engage in conversation : {conversation_history}"
                                 ),
                         },
                     ],
@@ -2751,41 +2706,8 @@ if st.session_state.feedback_shown:
 
     if not st.session_state.interview_saved:
         try:
-            # Use the confirmed profile from session state
-            candidate_data = st.session_state.candidate_data
-
-            # ---------------------------------------------------------------
-            # Normalise the phone format before saving
-            #   "+91-XXXXXXXXXX" -> unchanged
-            #   "+91XXXXXXXXXX"  -> "+91-XXXXXXXXXX"
-            # ---------------------------------------------------------------
-            phone = (
-                     candidate_data.get("phone_number")
-                     or candidate_data.get("phone")
-                    )
-
-            if phone:
-                phone = str(phone).strip()
-                   # Keep an existing hyphen if it is already present
-                if phone.startswith("+") and "-" in phone:
-                   full_phone = phone
-                elif phone.startswith("+91") and len(phone) == 13:
-                   full_phone = f"+91-{phone[3:]}"
-                else:
-                   full_phone = phone
-
-                candidate_data["phone"] = full_phone
-                candidate_data["phone_number"] = full_phone
-
-            # Debug output in the terminal
-            print(
-                "Candidate data being saved:",
-                repr(st.session_state.candidate_data)
-            )
-
             # Save score, feedback and all Q&A pairs (Section 22)
             result = save_interview_to_mysql(
-                candidate_data=st.session_state.candidate_data,
                 messages=st.session_state.messages,
                 feedback_text=feedback_text
             )
@@ -2806,7 +2728,10 @@ if st.session_state.feedback_shown:
 
         except Exception as e:
            st.error("Failed to save interview results.")
-           st.exception(e)   # shows the full error on the page (debugging)
+           # Log the type only: users must not see tracebacks, and the
+           # logs must not contain candidate data
+           print(f"Interview save failed: {type(e).__name__}")
+
 
     # -----------------------------------------------------------------------------------------
     # 23.3 RESTART INTERVIEW BUTTON
