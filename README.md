@@ -32,8 +32,9 @@
 13. [Security & Privacy](#security--privacy)
 14. [Project Structure](#project-structure)
 15. [Getting Started](#getting-started)
-16. [Design Decisions & Trade-offs](#design-decisions--trade-offs)
-17. [Known Limitations & Roadmap](#known-limitations--roadmap)
+16. [Deployment](#deployment)
+17. [Design Decisions & Trade-offs](#design-decisions--trade-offs)
+18. [Known Limitations & Roadmap](#known-limitations--roadmap)
 
 ---
 
@@ -45,7 +46,7 @@ Ibot simulates a real first-round technical interview:
 | Stage | What happens |
 |---|---|
 | **1. Profile** | The candidate uploads a resume (PDF / DOCX / TXT) **or** fills in a manual form. The resume is parsed by an LLM into a strict JSON profile. |
-| **2. Review** | The candidate reviews every extracted field (name, email, phone, experience, skills, projects, summary) and can edit any of them. Edits are written to MySQL. |
+| **2. Review** | The candidate reviews every field (name, email, phone, experience, skills, projects, plus a summary for resumes) and can edit any of them. Edits are written to MySQL. |
 | **3. Interview** | On *Confirm & Start*, the profile is **locked** and **snapshotted**. The AI asks **exactly 5** personalised questions, one at a time, with follow-ups based on previous answers. |
 | **4. Evaluation** | An evaluator LLM scores each answer (0–5) and computes an overall score (0–10) calibrated to the candidate's years of experience. Scores are colour-coded, and every Q&A pair is saved. |
 
@@ -90,6 +91,7 @@ Ibot simulates a real first-round technical interview:
 | UI / App server | **Streamlit** | Fast to build interactive data/AI apps in pure Python; built-in chat components and streaming. |
 | LLM | **OpenAI** (`gpt-5.6-luna`), Responses API + Chat Completions API | Structured Outputs for parsing; streaming chat for the interview. |
 | Database | **MySQL 8** + `mysql-connector-python` (connection pool) | Relational integrity, transactions, row-level locks, JSON columns. |
+| Hosting | **Streamlit Community Cloud** + **Aiven** MySQL (free tiers) | Free deployment from GitHub, with a managed database over TLS. |
 | Document parsing | `pypdf`, `python-docx` | Lightweight text extraction. |
 | PII | **Microsoft Presidio** + spaCy `en_core_web_sm` | Detects and masks names, emails and phone numbers before LLM calls (optional). |
 | Browser helper | `streamlit-js-eval` | Page reload for "Restart Interview". |
@@ -112,7 +114,7 @@ flowchart LR
         EV["Evaluator<br/>score + feedback"]
         FMT["Feedback Formatter<br/>score colours · dividers"]
         OC["OpenAI Client<br/>@cache_resource<br/>timeout + retries"]
-        POOL["MySQL Connection Pool<br/>@cache_resource · 10 conns"]
+        POOL["MySQL Connection Pool<br/>@cache_resource · 5 conns · TLS"]
     end
 
     UI <--> SS
@@ -211,7 +213,7 @@ stateDiagram-v2
 
     Completed --> Feedback: Get Feedback
     Feedback --> [*]: Restart Interview
-    Ended --> [*]
+    Ended --> [*]: Restart Interview
 ```
 
 | Flag | Meaning |
@@ -235,7 +237,7 @@ erDiagram
     INTERVIEWS ||--o{ INTERVIEW_RESPONSES : "contains"
 
     CANDIDATES {
-        bigint candidate_id PK
+        int candidate_id PK
         char public_candidate_id UK "7-digit public reference"
         varchar name
         varchar email UK "upsert key"
@@ -247,73 +249,27 @@ erDiagram
     }
 
     INTERVIEWS {
-        bigint interview_id PK
-        bigint candidate_id FK
-        enum status "in_progress | completed | ended"
+        int interview_id PK
+        int candidate_id FK
+        varchar status "in_progress | completed | ended"
         json candidate_snapshot "frozen profile at start"
         decimal overall_score "0.0 - 10.0"
-        longtext overall_feedback
-        datetime created_at
+        text overall_feedback
+        timestamp created_at
         datetime last_activity_at
         datetime ended_at
     }
 
     INTERVIEW_RESPONSES {
-        bigint response_id PK
-        bigint interview_id FK
+        int response_id PK
+        int interview_id FK
         int question_number
         text ai_question
         text user_answer
     }
 ```
 
-<details>
-<summary><b>📜 Reference schema (SQL)</b></summary>
-
-```sql
-CREATE TABLE candidates (
-    candidate_id          BIGINT AUTO_INCREMENT PRIMARY KEY,
-    public_candidate_id   CHAR(7)       NOT NULL UNIQUE,
-    name                  VARCHAR(255),
-    email                 VARCHAR(255)  UNIQUE,
-    phone                 VARCHAR(32),
-    company               VARCHAR(255),
-    setup_mode            VARCHAR(32),
-    extracted_resume_text LONGTEXT,
-    structured_data       JSON,
-    created_at            DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6)
-);
-
-CREATE TABLE interviews (
-    interview_id        BIGINT AUTO_INCREMENT PRIMARY KEY,
-    candidate_id        BIGINT NOT NULL,
-    status              ENUM('in_progress','completed','ended') NOT NULL,
-    candidate_snapshot  JSON NULL,
-    overall_score       DECIMAL(3,1) NULL,
-    overall_feedback    LONGTEXT NULL,
-    created_at          DATETIME(6) NOT NULL,
-    last_activity_at    DATETIME(6) NOT NULL,
-    ended_at            DATETIME(6) NULL,
-    CONSTRAINT fk_interviews_candidate
-        FOREIGN KEY (candidate_id) REFERENCES candidates(candidate_id),
-    INDEX idx_candidate_status (candidate_id, status, last_activity_at)
-);
-
-CREATE TABLE interview_responses (
-    response_id      BIGINT AUTO_INCREMENT PRIMARY KEY,
-    interview_id     BIGINT NOT NULL,
-    question_number  INT NOT NULL,
-    ai_question      TEXT NOT NULL,
-    user_answer      TEXT NOT NULL,
-    CONSTRAINT fk_responses_interview
-        FOREIGN KEY (interview_id) REFERENCES interviews(interview_id),
-    UNIQUE KEY uq_interview_question (interview_id, question_number)
-);
-```
-
-> Adjust column sizes and types to match your environment.
-
-</details>
+The exact table definitions are in [`database/schema.sql`](database/schema.sql).
 
 **Why two IDs?** `candidate_id` is the internal auto-increment key and is never shown. `public_candidate_id` is a random 7-digit reference shown to the candidate, so internal row counts and sequential IDs are not exposed.
 
@@ -400,20 +356,25 @@ Every query uses **parameterised placeholders** (`%s`). No user input is ever co
 
 | Failure | Behaviour |
 |---|---|
-| OpenAI key missing or empty | Client set to `None`; a clear configuration error is shown. The key is never logged. |
+| OpenAI key missing or empty | A clear configuration error is shown and the app stops. The key is never logged. |
 | Transient OpenAI/network errors | Client configured with `timeout=90s` and `max_retries=2`. |
 | Scanned / empty resume | Rejected early: *"No readable text was found..."* |
 | Unsupported file type | Blocked by the uploader (`pdf/docx/txt`) and validated again in code. |
 | LLM returns malformed data | Prevented by **strict JSON Schema**; fields are then normalised (trimmed strings, `None` for blanks, lists guaranteed). |
 | Ambiguous candidate name | The parser is instructed to return `null` instead of guessing (for example, not "Django"). |
 | No summary produced | A fallback summary text is stored. |
-| Idle / dropped MySQL connection | `conn.ping(reconnect=True, attempts=2)` before every use. |
-| Any DB error | `ROLLBACK`, connection returned to the pool, user-friendly message, full traceback in the server log. |
+| First question fails | Nothing is saved to the session, so the call is retried on the next rerun. |
+| Next question fails | The answer is undone so the candidate can send it again. |
+| Second answer sent while a question streams | Blocked: the chat input is locked until the reply finishes. |
+| Idle / dropped MySQL connection | `conn.ping(reconnect=True, attempts=2)` before every use; a failed connection is still returned to the pool. |
+| Database unavailable during resume save | The candidate sees *"the database is unavailable. Please try again shortly."* instead of a resume error. |
+| Any DB error | `ROLLBACK`, connection returned to the pool, user-friendly message, error details in the server log only. |
 | Duplicate email on edit | `IntegrityError` caught → *"This email is already linked to another candidate."* |
 | Invalid edits | Validated before saving (required name, email format, phone format, numeric experience). |
 | Starting with unsaved edits | *Confirm & Start* is disabled while any edit box is open. |
+| Interview ended early | No feedback is generated; the candidate is told why and offered **Restart Interview**. |
 | LLM tries to ask a 6th question | Impossible, because the 5th answer ends the interview **in code** without calling the LLM. |
-| Score missing from feedback | A tolerant regex handles Markdown and colour wrappers; if it still fails, nothing is saved (rollback) and the error is shown. |
+| Score missing from feedback | A tolerant regex handles Markdown and colour wrappers; if it still fails, nothing is saved (rollback) and a friendly error is shown. |
 | Wrong colour from the LLM | Impossible, because colours are applied **in Python** from fixed thresholds, not by the model. |
 
 ---
@@ -427,9 +388,9 @@ Every expensive operation is wrapped in a `measure_time()` context manager that 
 |---|---|---|---|
 | 1 | Presidio loaded spaCy `en_core_web_lg` (~550 MB) on **every app start**, even when unused | **Lazy import** inside a cached factory, switched to `en_core_web_sm` (~12 MB), and loaded only when `USE_PII_MASKING = True` | Removes the largest startup delay |
 | 2 | Feedback **regenerated on every rerun** (any click → new 3,000-token LLM call; score changed each time) | Cached in `st.session_state.feedback_text` | 1 evaluation call per interview; stable scores; lower cost |
-| 3 | New MySQL TCP + auth handshake for **every query** (including every answer) | `MySQLConnectionPool` (10 conns) cached with `@st.cache_resource` | DB calls drop from a full connect to an in-memory checkout |
+| 3 | New MySQL TCP + auth handshake for **every query** (including every answer) | `MySQLConnectionPool` (5 conns) cached with `@st.cache_resource` | DB calls drop from a full connect to an in-memory checkout |
 | 4 | New `OpenAI()` client on every rerun | Cached client → reused HTTP connection pool | Fewer TLS handshakes |
-| 5 | Long waits for LLM output | **Streaming** (`stream=True` + `st.write_stream`) for questions and feedback | Near-instant time-to-first-token for the user |
+| 5 | Long waits for LLM output | **Streaming** (`stream=True` + `st.write_stream`) for questions and feedback | Text appears as it is generated instead of all at once |
 | 6 | Over-thinking on simple tasks | Reasoning effort tuned per task: `none` for questions, `low` for parsing and evaluation | Lower latency and cost |
 | 7 | Re-parsing the same resume on rerun | SHA-256 file hash check | Parse once per file |
 | 8 | Streamlit file watcher overhead | `.streamlit/config.toml`: `fileWatcherType = "none"` (prod), `fastReruns = true`, telemetry off | Less background work |
@@ -470,12 +431,15 @@ Every expensive operation is wrapped in a `measure_time()` context manager that 
 <a id="security--privacy"></a>
 ## 🛡️ Security & Privacy
 
-- **Secrets** (OpenAI key, DB credentials) live in `.streamlit/secrets.toml`, which is **git-ignored**, and are never logged.
+- **Secrets** (OpenAI key, DB credentials) live in `.streamlit/secrets.toml` locally, which is **git-ignored**, and in Streamlit Cloud's encrypted secrets when deployed. They are never logged.
+- **Encrypted database connection:** the cloud database uses TLS with certificate verification (`certs/ca.pem`, a public CA certificate).
+- **Least-privilege database user:** the app account can only read and write this app's tables.
 - **Parameterised SQL** everywhere.
 - **Optional PII masking** (Presidio) before text is sent to the LLM, with custom recognisers for company names.
-- **Public vs internal IDs:** internal keys are never exposed.
+- **Public vs internal candidate IDs:** the internal `candidate_id` is never shown.
 - **Server-side validation** of every edited field; database-level locks rather than UI-only checks.
-- **Metadata-only logging** for normal operations (IDs, file-hash prefix, error types).
+- **Upload limit:** resumes are limited to 5 MB (`server.maxUploadSize`).
+- **Metadata-only logging:** logs hold IDs, timings, the file-hash prefix and error types, never resume text or contact details.
 
 ---
 
@@ -483,12 +447,17 @@ Every expensive operation is wrapped in a `measure_time()` context manager that 
 ## 📁 Project Structure
 
 ```
-Interview_AI_BOT/
+Interview-Gen-AI-BOT/
 ├── interview_app.py          # Streamlit application (all sections numbered & commented)
 ├── AI_Interview_icon.png     # Browser tab icon
 ├── requirements.txt
 ├── README.md
-├── docs/                     # Screenshots / diagrams for this README
+├── .gitignore
+├── certs/
+│   └── ca.pem                # Public CA certificate for the cloud database
+├── database/
+│   └── schema.sql            # Table structure (no data)
+├── docs/                     # Screenshots for this README
 └── .streamlit/
     ├── config.toml           # Server/runtime settings (committed)
     └── secrets.toml          # API key + DB credentials (NOT committed)
@@ -503,11 +472,11 @@ Interview_AI_BOT/
 | 6–10 | Session-state initialisation, callbacks, setup screen |
 | 11–13 | Resume text extraction · JSON schema · LLM parsing |
 | 14–15 | Lazy Presidio PII engine · masking |
-| 16 / 16.0 / 16.1 | Candidate upsert · profile edit helpers + DB lock · review screen |
+| 16 / 16.1 / 16.2 | Candidate upsert · profile edit helpers + DB lock · review screen |
 | 17 / 18 | Upload-resume path · manual-form path |
 | 18.16–18.18 | Interview lifecycle DB functions · sidebar |
 | 19–21 | Interview chat loop · completion · *Get Feedback* |
-| 22 / 22.0 / 22.1 | Transactional result save · score colouring · evaluator prompt |
+| 22 / 22.7 / 22.8 | Transactional result save · score colouring · evaluator prompt |
 | 23–24 | Feedback rendering + persistence · run timing |
 
 ---
@@ -522,12 +491,12 @@ Interview_AI_BOT/
 
 ```bash
 # 1. Clone and install
-git clone https://github.com/<your-username>/Interview_AI_BOT.git
-cd Interview_AI_BOT
+git clone https://github.com/naveenvasu55/Interview-Gen-AI-BOT.git
+cd Interview-Gen-AI-BOT
 pip install -r requirements.txt
 ```
 
-**2. Create the database:** run the SQL in [Database Design](#database-design).
+**2. Create the database:** create an empty database named `interview_db`, then run [`database/schema.sql`](database/schema.sql) in it, for example with MySQL Workbench.
 
 **3. Add secrets** in `.streamlit/secrets.toml` (git-ignored):
 
@@ -539,18 +508,52 @@ host = "localhost"
 port = 3306
 user = "ibot_user"
 password = "********"
-database = "ibot"
+database = "interview_db"
 ```
 
 ```bash
-# 4. Run
-streamlit run interview_app.py
+# 4. Run (only this computer can open it)
+streamlit run interview_app.py --server.address 127.0.0.1
 ```
 
-**5. (Optional) PII masking:** set `USE_PII_MASKING = True` and run
-`python -m spacy download en_core_web_sm`.
+**5. (Optional) PII masking:** set `USE_PII_MASKING = True`, pass `masked_resume_text` to the parser (Section 17), and install the extra packages:
+
+```bash
+pip install presidio-analyzer presidio-anonymizer
+python -m spacy download en_core_web_sm
+```
 
 </details>
+
+---
+
+<a id="deployment"></a>
+## ☁️ Deployment
+
+The app runs for free on **Streamlit Community Cloud** with a free **Aiven** MySQL database.
+
+1. **Create the database:** in the Aiven MySQL service, create an `interview_bot` database and a dedicated app user with `SELECT, INSERT, UPDATE, DELETE` on that database only, and `REQUIRE SSL`.
+2. **Load the tables:** run [`database/schema.sql`](database/schema.sql) in `interview_bot`.
+3. **Add the certificate:** commit Aiven's CA certificate as `certs/ca.pem`. It's public, so it's safe in the repository.
+4. **Deploy:** on [share.streamlit.io](https://share.streamlit.io), choose this repository and `interview_app.py` as the main file.
+5. **Add the secrets** under **Advanced settings**:
+
+```toml
+OPENAI_API_KEY = "sk-..."
+
+[mysql]
+host = "<aiven-host>"
+port = 12345
+user = "<app-user>"
+password = "<app-password>"
+database = "interview_bot"
+ssl_ca = "certs/ca.pem"
+ssl_verify_cert = true
+```
+
+> Free tiers switch off when idle: Streamlit apps sleep and Aiven services power off, so both may need waking before use.
+
+---
 
 <a id="design-decisions--trade-offs"></a>
 ## ⚖️ Design Decisions & Trade-offs
@@ -617,10 +620,10 @@ Being upfront about limitations is a strength in interviews.
 | Code organisation | Single-file Streamlit app | Split into `services/` (llm, db, resume, scoring) and `ui/` modules |
 | Testing | Manual testing | `pytest` unit tests for validators, score regex, colouring and DB functions (with a test DB) |
 | Feedback format | Score extracted from Markdown via regex | Use Structured Outputs for evaluation (JSON scores + text) → no regex dependency |
-| OpenAI unavailable | Error shown at startup; later calls would still fail | Guard every LLM call when `client is None`; graceful "service unavailable" screen |
 | Stale interviews | Ignored after 2 h by the lock query | Scheduled job to mark abandoned `in_progress` interviews as `ended` |
-| Debug logging | Some debug prints include profile data | Structured logging with PII redaction and log levels |
-| Authentication | None (identity = email) | Login / magic link; role-based recruiter dashboard |
+| Logging | Plain `print` output in the server log | Structured logging with log levels |
+| Authentication | None (identity = email), so the same email overwrites a profile | Login / magic link; role-based recruiter dashboard |
+| Availability | Free tiers sleep when idle and need waking | Always-on hosting and a serverless or paid database |
 | Scale | Single Streamlit process | Containerise (Docker), externalise state, move LLM/DB work behind an API |
 | Analytics | Raw data in MySQL | Recruiter dashboard: score distributions, skill gaps, question difficulty |
 | Interview modes | Text only | Voice interviews (speech-to-text), role-specific question banks, coding questions |
