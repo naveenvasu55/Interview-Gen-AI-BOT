@@ -347,35 +347,62 @@ if not st.session_state.choose_setup:
 #   Supported formats: PDF, DOCX, TXT
 #   Checks the uploaded file's extension and uses the matching
 #   library to extract plain text.
-#   Returns: the resume as a single text string.
+#   Returns: the resume as a single text string (raw - it is
+#   cleaned and checked afterwards by prepare_resume_text(),
+#   Section 11.7).
 # ============================================================
 def extract_resume_text(uploaded_file):
     file_name = uploaded_file.name.lower()
 
     # --------------------------------------------------------
-    # 11.1 PDF - read every page and join the text
+    # 11.1 PDF - read every page, keep pages apart
+    #   Pages are joined with a blank line; joining them with
+    #   nothing glued the last word of one page to the first
+    #   word of the next. A header/footer line repeated on
+    #   several pages (name, "Confidential", ...) is kept only
+    #   once (Section 11.5).
     # --------------------------------------------------------
     if file_name.endswith(".pdf"):
         reader = PdfReader(uploaded_file)
-        text = ""
-        for page in reader.pages:
-            text += page.extract_text() or ""   # "or ''" handles image-only pages
-        return text
+        pages = [page.extract_text() or "" for page in reader.pages]   # "or ''" = image-only page
+        return "\n\n".join(remove_repeated_page_lines(pages))
     # --------------------------------------------------------
-    # 11.2 DOCX - read every paragraph, one per line
+    # 11.2 DOCX - header, body (paragraphs AND tables, in
+    #   document order) and footer
+    #   Many resumes keep contact details in the page header
+    #   and skills in a table; reading paragraphs only missed
+    #   both.
     # --------------------------------------------------------
     elif file_name.endswith(".docx"):
         document = Document(uploaded_file)
-        text = ""
-        for paragraph in document.paragraphs:
-            text += paragraph.text + "\n"
-        return text
+        headers, footers = [], []
+
+        for section in document.sections:
+            headers.extend(docx_block_lines(section.header.iter_inner_content()))
+            footers.extend(docx_block_lines(section.footer.iter_inner_content()))
+
+        body = docx_block_lines(document.iter_inner_content())
+
+        # dict.fromkeys keeps the first copy of each line, in order
+        # (every section repeats the same header and footer)
+        return "\n".join(
+            list(dict.fromkeys(headers)) + body + list(dict.fromkeys(footers))
+        )
     # --------------------------------------------------------
-    # 11.3 TXT - decode the raw bytes as UTF-8
+    # 11.3 TXT - decode the raw bytes
+    #   utf-8-sig : UTF-8, removes the invisible BOM character
+    #               Notepad sometimes adds at the start
+    #   cp1252    : files saved in the classic Windows encoding
+    #               (would crash with strict UTF-8)
+    #   latin-1   : last resort, can decode any byte
     # --------------------------------------------------------
     elif file_name.endswith(".txt"):
-        text = uploaded_file.read().decode("utf-8")
-        return text
+        raw_bytes = uploaded_file.read()
+        for encoding in ("utf-8-sig", "cp1252", "latin-1"):
+            try:
+                return raw_bytes.decode(encoding)
+            except UnicodeDecodeError:
+                continue
     # --------------------------------------------------------
     # 11.4 UNSUPPORTED FILE
     # --------------------------------------------------------
@@ -384,6 +411,168 @@ def extract_resume_text(uploaded_file):
             "Unsupported file type. "
             "Please upload a PDF, DOCX, or TXT file."
         )
+
+
+# --------------------------------------------------------
+# 11.5 HELPERS FOR 11.1 / 11.2
+# --------------------------------------------------------
+
+def docx_block_lines(blocks):
+    """Text lines of DOCX paragraphs and tables, in document order.
+
+    A table row becomes one line with its cells separated by " | ".
+    Merged cells are returned once per row by python-docx for every
+    grid column they span, so repeated neighbouring cells are dropped.
+    """
+    lines = []
+    for block in blocks:
+        if hasattr(block, "rows"):                     # a table
+            for row in block.rows:
+                cells = []
+                for cell in row.cells:
+                    text = cell.text.strip()
+                    if text and (not cells or cells[-1] != text):
+                        cells.append(text)
+                if cells:
+                    lines.append(" | ".join(cells))
+        else:                                          # a paragraph
+            lines.append(block.text)
+    return lines
+
+
+def remove_repeated_page_lines(pages):
+    """Keep a header/footer line only on the first page it appears on.
+
+    Only the first two and last two lines of each page are looked at,
+    and only lines found there on at least two pages are treated as a
+    header/footer - so normal content that happens to repeat (such as
+    "Responsibilities:") is never removed.
+    """
+    if len(pages) < 2:
+        return pages
+
+    page_lines = [page.splitlines() for page in pages]
+    edge_count = {}
+    for lines in page_lines:
+        filled = [line.strip() for line in lines if line.strip()]
+        for line in set(filled[:2] + filled[-2:]):
+            edge_count[line] = edge_count.get(line, 0) + 1
+
+    repeated = {line for line, count in edge_count.items() if count >= 2}
+    seen = set()
+    cleaned_pages = []
+
+    for lines in page_lines:
+        kept = []
+        for line in lines:
+            key = line.strip()
+            if key in repeated:
+                if key in seen:
+                    continue          # header/footer copy on a later page
+                seen.add(key)
+            kept.append(line)
+        cleaned_pages.append("\n".join(kept))
+
+    return cleaned_pages
+
+
+# --------------------------------------------------------
+# 11.6 CLEAN THE EXTRACTED TEXT
+#   Removes noise the LLM does not need, WITHOUT removing
+#   meaning: every word, number, date, email and phone stays,
+#   and line breaks stay (the layout helps the model find the
+#   Skills / Experience / Education sections).
+#   NOT used on purpose: stop-word removal, Bag of Words or
+#   TF-IDF - they drop word order and words such as "not" and
+#   "Present", which the parser needs to read roles and dates.
+#
+#   Steps, in order:
+#     1. Unicode NFKC: ligatures ("ﬁ" -> "fi"), full-width and
+#        non-breaking spaces -> normal characters
+#     2. Remove invisible characters (zero-width spaces, soft
+#        hyphens, BOM) and control characters
+#     3. Re-join words split by a line-end hyphen
+#        ("develop-\nment" -> "development"; only lower-case
+#        continuations, so "Spring-\nBoot" is left alone)
+#     4. Bullet symbols at the start of a line -> "- "
+#        (incl. Word's private Symbol-font bullets)
+#     5. Runs of spaces/tabs -> one space; trim every line
+#     6. Drop lines that are only a page number ("3", "Page 2 of 4")
+#     7. 2+ blank lines -> 1 blank line
+# --------------------------------------------------------
+import unicodedata
+
+INVISIBLE_CHARACTERS = re.compile("[​‌‍⁠﻿­]")
+CONTROL_CHARACTERS = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
+BULLET_SYMBOLS = "•▪●◦‣⁃∙■□▶►➢➤➔✓✔❖"
+LINE_START_BULLET = re.compile(r"^[ \t]*[" + re.escape(BULLET_SYMBOLS) + r"][ \t]*", re.MULTILINE)
+PAGE_NUMBER_LINE = re.compile(
+    r"^[ \t]*(page[ \t]*)?\d{1,3}([ \t]*(of|/)[ \t]*\d{1,3})?[ \t]*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def clean_resume_text(text):
+    text = unicodedata.normalize("NFKC", text or "")             # 1
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text = INVISIBLE_CHARACTERS.sub("", text)                    # 2
+    text = CONTROL_CHARACTERS.sub(" ", text)                     #   (tabs/newlines kept)
+    text = re.sub(r"([a-z])-[ \t]*\n[ \t]*([a-z])", r"\1\2", text)   # 3
+    text = LINE_START_BULLET.sub("- ", text)                     # 4
+    text = re.sub(r"[ \t]+", " ", text)                          # 5
+    text = "\n".join(line.strip() for line in text.split("\n"))
+    text = PAGE_NUMBER_LINE.sub("", text)                        # 6
+    text = re.sub(r"\n{3,}", "\n\n", text)                       # 7
+    return text.strip()
+
+
+# --------------------------------------------------------
+# 11.7 PREPARE THE RESUME TEXT: extract -> clean -> check
+#   Used by the upload screen (Section 17). Returns the text
+#   that is sent to the LLM AND saved in MySQL
+#   (candidates.extracted_resume_text), so evaluate.py checks
+#   the parse against exactly what the model saw.
+#
+#   Guards (both protect quality and the OpenAI budget):
+#     MIN_RESUME_CHARACTERS  less text than this usually means a
+#                            scanned (image) PDF -> clear message
+#                            instead of letting the model guess
+#     MAX_RESUME_CHARACTERS  ~5,000 tokens; longer text is cut at
+#                            a line break and the user is told,
+#                            so an oversized upload can never
+#                            become an expensive request
+# --------------------------------------------------------
+MIN_RESUME_CHARACTERS = 200
+MAX_RESUME_CHARACTERS = 20_000
+
+
+class ResumeTextError(ValueError):
+    """A resume problem the user can fix; the message is shown as is."""
+
+
+def prepare_resume_text(uploaded_file):
+    """Returns (cleaned_text, stats). stats holds sizes only, never text."""
+    raw_text = extract_resume_text(uploaded_file)
+    text = clean_resume_text(raw_text)
+
+    if len(text) < MIN_RESUME_CHARACTERS:
+        raise ResumeTextError(
+            "We could find almost no text in this resume. It may be a "
+            "scanned image. Please upload a text-based PDF, DOCX or TXT file "
+            "(for example, use 'Save as PDF' from Word instead of scanning)."
+        )
+
+    truncated = len(text) > MAX_RESUME_CHARACTERS
+    if truncated:
+        cut = text.rfind("\n", 0, MAX_RESUME_CHARACTERS)
+        text = text[: cut if cut > 0 else MAX_RESUME_CHARACTERS].rstrip()
+
+    stats = {
+        "raw_characters": len(raw_text),
+        "clean_characters": len(text),
+        "truncated": truncated,
+    }
+    return text, stats
 
 # ============================================================
 # 12. JSON SCHEMA FOR STRUCTURED RESUME DATA
@@ -562,6 +751,17 @@ def parse_resume_with_llm(resume_text, client):
             }
         }
       )
+
+        # Token usage of this call (numbers only). evaluate.py
+        # --perf-log reads these lines to report tokens per resume
+        # and to compare them before/after a change.
+        usage = getattr(response, "usage", None)
+        if usage is not None:
+            print(
+                "[TOKENS] Resume parsing: "
+                f"input={getattr(usage, 'input_tokens', 0)} "
+                f"output={getattr(usage, 'output_tokens', 0)}"
+            )
 
         if not response.output_text:
            raise ValueError("The resume parser returned no output.")
@@ -1294,10 +1494,27 @@ if (st.session_state.choose_setup and
 
             try :
               # ----------------------------------------------------
-              # 17.0.3 (a) Extract text from the uploaded file
+              # 17.0.3 (a) Extract, clean and check the text
+              #   (Section 11.7). Too little text -> ResumeTextError
+              #   with a message for the user (handled in 17.0.6).
               # ----------------------------------------------------
               with measure_time("Resume text extraction"):
-                 resume_text = extract_resume_text(uploaded_resume)
+                 resume_text, text_stats = prepare_resume_text(uploaded_resume)
+
+                 # Sizes only - never the resume text itself
+                 print(
+                     "[RESUME] characters "
+                     f"raw={text_stats['raw_characters']} "
+                     f"clean={text_stats['clean_characters']} "
+                     f"truncated={text_stats['truncated']}"
+                 )
+
+                 if text_stats["truncated"]:
+                     st.warning(
+                         "Your resume is very long, so only the first "
+                         f"{MAX_RESUME_CHARACTERS:,} characters were analysed. "
+                         "Please check the extracted details on the next screen."
+                     )
 
                 # ----------------------------------------------------
                 # 17.0.3 (b) Detect and mask PII ONLY when enabled
@@ -1396,7 +1613,11 @@ if (st.session_state.choose_setup and
               # Log the error type, not the resume or personal information
               print(f"Resume processing failed: {type(e).__name__}")
 
-              if isinstance(e, mysql.connector.Error):
+              if isinstance(e, ResumeTextError):
+                  # A problem with the file itself (e.g. scanned PDF):
+                  # the message explains how to fix it
+                  st.error(str(e))
+              elif isinstance(e, mysql.connector.Error):
                   st.error(
                       "We couldn't save your profile because the database "
                       "is unavailable. Please try again shortly."

@@ -757,6 +757,9 @@ def resume_metrics(candidates, labels):
 
 PERF_LINE = re.compile(r"\[PERFORMANCE\] (.+?):\s*([\d.]+) seconds")
 RERUN_LINE = re.compile(r"\[PERFORMANCE\] Script run \d+ completed in ([\d.]+) seconds")
+# Written by interview_app.py 13.2 / 17.0.3 (numbers only, no resume text)
+TOKENS_LINE = re.compile(r"\[TOKENS\] (.+?): input=(\d+) output=(\d+)")
+RESUME_LINE = re.compile(r"\[RESUME\] characters raw=(\d+) clean=(\d+) truncated=(\w+)")
 FAILURE_MARKERS = {
     "score_not_extracted": "Overall score was not found",
     "interview_save_failed": "Interview save failed",
@@ -769,8 +772,23 @@ FAILURE_MARKERS = {
 
 def perf_log_metrics(log_path):
     timings, failures = {}, {name: 0 for name in FAILURE_MARKERS}
+    tokens, resume_sizes = {}, []
 
     for line in Path(log_path).read_text(encoding="utf-8", errors="replace").splitlines():
+        token_match = TOKENS_LINE.search(line)
+        if token_match:
+            step = tokens.setdefault(token_match.group(1).strip(), {"input": [], "output": []})
+            step["input"].append(int(token_match.group(2)))
+            step["output"].append(int(token_match.group(3)))
+            continue
+        resume_match = RESUME_LINE.search(line)
+        if resume_match:
+            resume_sizes.append((
+                int(resume_match.group(1)),
+                int(resume_match.group(2)),
+                resume_match.group(3) == "True",
+            ))
+            continue
         rerun = RERUN_LINE.search(line)
         if rerun:
             timings.setdefault("Script rerun (whole page)", []).append(float(rerun.group(1)))
@@ -793,6 +811,26 @@ def perf_log_metrics(log_path):
             for name, values in sorted(timings.items())
         },
         "failures": failures,
+        # METRIC 12b - tokens per LLM step (logged for resume parsing)
+        "tokens": {
+            name: {
+                "calls": len(values["input"]),
+                "input_avg": round(statistics.mean(values["input"])),
+                "input_max": max(values["input"]),
+                "output_avg": round(statistics.mean(values["output"])),
+            }
+            for name, values in sorted(tokens.items())
+        },
+        # METRIC 12c - how much the text cleanup removed (Section 11.6)
+        "resume_text_cleanup": {
+            "resumes": len(resume_sizes),
+            "raw_characters_avg": round(statistics.mean(r for r, _, _ in resume_sizes)),
+            "clean_characters_avg": round(statistics.mean(c for _, c, _ in resume_sizes)),
+            "reduction_percent_avg": round(statistics.mean(
+                100 * (r - c) / r for r, c, _ in resume_sizes if r
+            ), 1),
+            "truncated": sum(1 for _, _, t in resume_sizes if t),
+        } if resume_sizes else None,
     }
 
 

@@ -359,7 +359,10 @@ Every query uses **parameterised placeholders** (`%s`). No user input is ever co
 |---|---|
 | OpenAI key missing or empty | A clear configuration error is shown and the app stops. The key is never logged. |
 | Transient OpenAI/network errors | Client configured with `timeout=90s` and `max_retries=2`. |
-| Scanned / empty resume | Rejected early: *"No readable text was found..."* |
+| Scanned / empty resume | Fewer than 200 characters after cleanup → rejected with *"It may be a scanned image. Please upload a text-based PDF…"*, so the model is never asked to guess. |
+| Very long resume | Cut at a line break after 20,000 characters (~5,000 tokens), and the candidate is told to check the extracted details. An oversized upload can't become an expensive request. |
+| Contact details in a DOCX header, skills in a table | Headers, footers and tables are read along with the paragraphs, in document order. |
+| TXT not saved as UTF-8 | Decoded as UTF-8 (BOM removed), then Windows-1252, then Latin-1, so the upload never crashes on encoding. |
 | Unsupported file type | Blocked by the uploader (`pdf/docx/txt`) and validated again in code. |
 | LLM returns malformed data | Prevented by **strict JSON Schema**; fields are then normalised (trimmed strings, `None` for blanks, lists guaranteed). |
 | Ambiguous candidate name | The parser is instructed to return `null` instead of guessing (for example, not "Django"). |
@@ -395,6 +398,7 @@ Every expensive operation is wrapped in a `measure_time()` context manager that 
 | 6 | Over-thinking on simple tasks | Reasoning effort tuned per task: `none` for questions, `low` for parsing and evaluation | Lower latency and cost |
 | 7 | Re-parsing the same resume on rerun | SHA-256 file hash check | Parse once per file |
 | 8 | Streamlit file watcher overhead | `.streamlit/config.toml`: `fileWatcherType = "none"` (prod), `fastReruns = true`, telemetry off | Less background work |
+| 9 | Noisy resume text (repeated spaces, page numbers, page headers repeated on every page, ligatures, invisible characters, broken hyphenation) sent to the LLM | **Meaning-preserving cleanup** (`clean_resume_text`, Section 11.6): every word, number, date, email and line break is kept. Stop-word removal / Bag of Words / TF-IDF are deliberately **not** used, because they drop word order and words like *"not"* and *"Present"* that the parser needs | Fewer input tokens and cleaner input; measured per upload via `[RESUME]` and `[TOKENS]` log lines |
 
 <!-- Tip: replace "Impact" with your own numbers from the [PERFORMANCE] logs, e.g. "Startup 14.2 s → 1.8 s". Real numbers are very persuasive in interviews. -->
 
@@ -418,7 +422,7 @@ An LLM app is only as good as you can prove it is. [`evaluate.py`](evaluate.py) 
 | **9** | **Resume "not invented"** | Parsed email / phone / company / name that don't appear in the resume text | Free |
 | **10** | **Resume field accuracy** | Name/email/phone accuracy, experience error, skills precision / recall / F1 against hand-checked labels | Free |
 | **11** | **System metrics** | Completion rate, interview duration, score distribution | Free |
-| **12** | **Latency per step** | p50 / p95 / max seconds for parsing, questions, feedback, reruns | Free |
+| **12** | **Latency, tokens & text cleanup** | p50 / p95 / max seconds per step; resume-parsing tokens per upload; % of characters removed by the cleanup | Free |
 | **13** | **Failure counts** | Score not extracted, save failed, OpenAI errors, tracebacks | Free |
 | **14** | **Golden-set ranking** | 4 synthetic interviews of known quality must score *skipped < weak < decent < excellent*, and *skipped* exactly 0 | ~4 calls |
 | **15** | **Scoring consistency** | The same interview scored 3× gives different results (standard deviation) | ~2 calls |
@@ -540,7 +544,7 @@ Interview-Gen-AI-BOT/
 | 1–4 | Imports, performance timer, page config, rerun diagnostics |
 | 5 / 5.1 | Cached OpenAI client · cached MySQL connection pool |
 | 6–10 | Session-state initialisation, callbacks, setup screen |
-| 11–13 | Resume text extraction · JSON schema · LLM parsing |
+| 11–13 | Resume text extraction (PDF pages, DOCX headers/tables/footers, TXT encodings), cleanup and size checks · JSON schema · LLM parsing |
 | 14–15 | Lazy Presidio PII engine · masking |
 | 16 / 16.1 / 16.2 | Candidate upsert · profile edit helpers + DB lock · review screen |
 | 17 / 18 | Upload-resume path · manual-form path |
@@ -689,7 +693,9 @@ Being upfront about limitations is a strength in interviews.
 |---|---|---|
 | Code organisation | Single-file Streamlit app | Split into `services/` (llm, db, resume, scoring) and `ui/` modules |
 | Testing | Manual testing + [`evaluate.py`](#evaluation--quality-metrics) quality metrics | `pytest` unit tests for validators, score regex, colouring and DB functions (with a test DB) |
-| Evaluation coverage | Token cost per interview, review-screen edit rate and per-question drop-off aren't logged yet | Log token usage and parsed-vs-edited fields to add these metrics |
+| Evaluation coverage | Tokens are logged for resume parsing only; review-screen edit rate and per-question drop-off aren't logged yet | Log tokens for the streamed question/feedback calls and parsed-vs-edited fields |
+| Scanned resumes | Detected and rejected with a clear message | OCR (e.g. Tesseract) for image-only PDFs |
+| Two-column PDF resumes | Text order depends on how the PDF was produced and can mix the columns | Layout-aware extraction (e.g. `pdfplumber` word positions) |
 | Feedback format | Score extracted from Markdown via regex | Use Structured Outputs for evaluation (JSON scores + text) → no regex dependency |
 | Stale interviews | Ignored after 2 h by the lock query | Scheduled job to mark abandoned `in_progress` interviews as `ended` |
 | Logging | Plain `print` output in the server log | Structured logging with log levels |
