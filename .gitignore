@@ -12,3 +12,12 @@ __pycache__/
 /test_db_connection.py
 /test_aiven_connection.py
 *.bak
+
+# Evaluation outputs (evaluate.py) - regenerated, may contain
+# real candidate labels or interview details
+/eval/cache/
+/eval/results/
+/eval/resume_labels.json
+
+# Local notes - keep out of GitHub
+/EVALUATION_METRICS.txt

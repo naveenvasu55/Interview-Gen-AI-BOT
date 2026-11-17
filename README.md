@@ -28,13 +28,14 @@
 9. [Concurrency, Locking & Data Integrity](#concurrency-locking--data-integrity)
 10. [Fallbacks & Error Handling](#fallbacks--error-handling)
 11. [Performance Optimisations](#performance-optimisations)
-12. [LLM & Prompt Engineering](#llm--prompt-engineering)
-13. [Security & Privacy](#security--privacy)
-14. [Project Structure](#project-structure)
-15. [Getting Started](#getting-started)
-16. [Deployment](#deployment)
-17. [Design Decisions & Trade-offs](#design-decisions--trade-offs)
-18. [Known Limitations & Roadmap](#known-limitations--roadmap)
+12. [Evaluation & Quality Metrics](#evaluation--quality-metrics)
+13. [LLM & Prompt Engineering](#llm--prompt-engineering)
+14. [Security & Privacy](#security--privacy)
+15. [Project Structure](#project-structure)
+16. [Getting Started](#getting-started)
+17. [Deployment](#deployment)
+18. [Design Decisions & Trade-offs](#design-decisions--trade-offs)
+19. [Known Limitations & Roadmap](#known-limitations--roadmap)
 
 ---
 
@@ -399,6 +400,71 @@ Every expensive operation is wrapped in a `measure_time()` context manager that 
 
 ---
 
+<a id="evaluation--quality-metrics"></a>
+## 📏 Evaluation & Quality Metrics
+
+An LLM app is only as good as you can prove it is. [`evaluate.py`](evaluate.py) measures the bot with **16 metrics**. It runs **outside** Streamlit, only **reads** what the app already stores (MySQL and the `[PERFORMANCE]` log), and never changes the app or its data. **13 of the 16 metrics cost nothing**: they're plain Python over stored data, with no LLM calls.
+
+| # | Metric | What it catches | Cost |
+|---|---|---|---|
+| **1** | **Formula adherence** | The overall score doesn't match `Σ question scores / (n × 5) × 10`, meaning the model *invented* it | Free |
+| **2** | **Format compliance** | Missing overall score (breaks saving), legend, question blocks or fields | Free |
+| **3** | **Zero-for-skip** | Points given for skipped / "I don't know" answers | Free |
+| **4** | **Answer-summary grounding** | A *"Candidate Answer"* summary that describes things the candidate never said | Free |
+| **5** | **One-question rule** | More than one question per turn | Free |
+| **6** | **Personalisation rate** | Generic questions that use nothing from the candidate's profile | Free |
+| **7** | **Repeated questions** | The same question asked twice in one interview | Free |
+| **8** | **Question length** | Rambling, multi-part questions | Free |
+| **9** | **Resume "not invented"** | Parsed email / phone / company / name that don't appear in the resume text | Free |
+| **10** | **Resume field accuracy** | Name/email/phone accuracy, experience error, skills precision / recall / F1 against hand-checked labels | Free |
+| **11** | **System metrics** | Completion rate, interview duration, score distribution | Free |
+| **12** | **Latency per step** | p50 / p95 / max seconds for parsing, questions, feedback, reruns | Free |
+| **13** | **Failure counts** | Score not extracted, save failed, OpenAI errors, tracebacks | Free |
+| **14** | **Golden-set ranking** | 4 synthetic interviews of known quality must score *skipped < weak < decent < excellent*, and *skipped* exactly 0 | ~4 calls |
+| **15** | **Scoring consistency** | The same interview scored 3× gives different results (standard deviation) | ~2 calls |
+| **16** | **Experience calibration** | The same answers aren't judged differently for 1 vs 8 years of experience | ~2 calls |
+
+**Cost control for the paid tests (14–16):**
+- The evaluator prompt and model are **read from `interview_app.py`** itself, so the tests always match the live app.
+- A **plan** with the number of calls and a token estimate is printed, and nothing is sent until you type `yes`.
+- A hard **`--max-calls`** limit (default 10) applies.
+- Every answer is **cached** in `eval/cache/`, so running the tests again costs $0.
+- The tests use **synthetic interviews only** ([`eval/golden_transcripts.json`](eval/golden_transcripts.json)), so no real candidate data is sent.
+
+**Run it**
+
+```bash
+python evaluate.py --sample          # demo interview with planted mistakes (no DB, no API)
+python evaluate.py                   # free metrics on your real interviews
+python evaluate.py --perf-log perf.log --resume-labels eval/resume_labels.json
+python evaluate.py --llm-tests       # paid tests: shows the plan, asks before calling
+```
+
+**Example output** (`--sample`, whose demo interview has deliberate errors):
+
+```
+1  Formula adherence rate (%)                0.0
+2  Format compliance rate (%)                100.0
+3  Zero-for-skip rate (%)                    0.0
+4  Summary grounding (avg 0-1)               0.75
+5  One-question rule (%)                     80.0
+6  Personalisation rate (%)                  80.0
+7  Repeated question pairs                   1
+
+  Interview SAMPLE:
+    - formula: reported 7.0 vs expected 5.4
+    - Q3 skipped but scored 1.0/5
+    - Q4 summary grounding 0.0
+    - multiple questions in Q[4]
+    - Q1 and Q5 repeat (similarity 0.96)
+```
+
+**What it found on real data:** the evaluator followed its rules (formula adherence 100 %, all skipped answers scored 0), but only **20 %** of the questions used the candidate's profile. That points to the interviewer prompt as the next thing to improve, and gives a number to measure the improvement against. This was based on the first interview stored, so the rates become meaningful as more interviews are completed.
+
+Reports print interview IDs and numbers only (no names, emails or answers) and are saved to `eval/results/metrics_<time>.json` (git-ignored) for before/after comparisons.
+
+---
+
 <a id="llm--prompt-engineering"></a>
 ## 🧠 LLM & Prompt Engineering
 
@@ -449,6 +515,7 @@ Every expensive operation is wrapped in a `measure_time()` context manager that 
 ```
 Interview-Gen-AI-BOT/
 ├── interview_app.py          # Streamlit application (all sections numbered & commented)
+├── evaluate.py               # 16 quality metrics (runs outside Streamlit, read-only)
 ├── AI_Interview_icon.png     # Browser tab icon
 ├── requirements.txt
 ├── README.md
@@ -458,6 +525,9 @@ Interview-Gen-AI-BOT/
 ├── database/
 │   └── schema.sql            # Table structure (no data)
 ├── docs/                     # Screenshots for this README
+├── eval/
+│   ├── golden_transcripts.json     # Synthetic interviews of known quality (paid tests)
+│   └── resume_labels.example.json  # Template for hand-checked resume fields
 └── .streamlit/
     ├── config.toml           # Server/runtime settings (committed)
     └── secrets.toml          # API key + DB credentials (NOT committed)
@@ -618,7 +688,8 @@ Being upfront about limitations is a strength in interviews.
 | Area | Current state | Planned improvement |
 |---|---|---|
 | Code organisation | Single-file Streamlit app | Split into `services/` (llm, db, resume, scoring) and `ui/` modules |
-| Testing | Manual testing | `pytest` unit tests for validators, score regex, colouring and DB functions (with a test DB) |
+| Testing | Manual testing + [`evaluate.py`](#evaluation--quality-metrics) quality metrics | `pytest` unit tests for validators, score regex, colouring and DB functions (with a test DB) |
+| Evaluation coverage | Token cost per interview, review-screen edit rate and per-question drop-off aren't logged yet | Log token usage and parsed-vs-edited fields to add these metrics |
 | Feedback format | Score extracted from Markdown via regex | Use Structured Outputs for evaluation (JSON scores + text) → no regex dependency |
 | Stale interviews | Ignored after 2 h by the lock query | Scheduled job to mark abandoned `in_progress` interviews as `ended` |
 | Logging | Plain `print` output in the server log | Structured logging with log levels |
@@ -641,6 +712,7 @@ Being upfront about limitations is a strength in interviews.
    - Exactly-once semantics in a framework that reruns the whole script on every click.
    - Moving business rules out of the LLM into deterministic code.
 5. **Performance story (1 min):** "I instrumented every step, found the 550 MB spaCy model loading on startup, and fixed it with lazy loading" plus pooling and caching.
-6. **What I'd do next (30 s):** modularise, add tests, Structured Outputs for evaluation, Docker.
+6. **Evaluation story (1 min):** "I measure the bot with 16 metrics, 13 of them free. They proved the scores follow the formula, and showed that only 20 % of the questions were personalised, which is the next thing to fix." Run `python evaluate.py --sample` live.
+7. **What I'd do next (30 s):** modularise, add tests, Structured Outputs for evaluation, Docker.
 
 ---

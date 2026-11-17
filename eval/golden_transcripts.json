@@ -1,0 +1,51 @@
+{
+  "description": "Synthetic interviews with a KNOWN quality, used by evaluate.py --llm-tests. Same 5 questions in every transcript; only the answers differ. No real candidate data.",
+  "expected_order": ["all_skipped", "weak", "decent", "excellent"],
+  "must_score_zero": "all_skipped",
+  "transcripts": [
+    {
+      "id": "all_skipped",
+      "experience": "3 years",
+      "turns": [
+        {"question": "Can you describe a REST API you built with Spring Boot and your role in it?", "answer": "skip"},
+        {"question": "How does Spring Boot auto-configuration decide which beans to create?", "answer": "next question please"},
+        {"question": "How would you find and fix a slow SQL query used by your service?", "answer": ""},
+        {"question": "How do you secure a Spring Boot REST API?", "answer": "I don't know"},
+        {"question": "How do you handle exceptions consistently across controllers?", "answer": "pass"}
+      ]
+    },
+    {
+      "id": "weak",
+      "experience": "3 years",
+      "turns": [
+        {"question": "Can you describe a REST API you built with Spring Boot and your role in it?", "answer": "I made some APIs for a project."},
+        {"question": "How does Spring Boot auto-configuration decide which beans to create?", "answer": "It configures things automatically."},
+        {"question": "How would you find and fix a slow SQL query used by your service?", "answer": "I would make the query faster."},
+        {"question": "How do you secure a Spring Boot REST API?", "answer": "By using a password."},
+        {"question": "How do you handle exceptions consistently across controllers?", "answer": "With try catch."}
+      ]
+    },
+    {
+      "id": "decent",
+      "experience": "3 years",
+      "turns": [
+        {"question": "Can you describe a REST API you built with Spring Boot and your role in it?", "answer": "I built an order service with Spring Boot: controllers for create and get order, a service layer, and Spring Data JPA repositories on MySQL. I wrote most of the endpoints and the unit tests."},
+        {"question": "How does Spring Boot auto-configuration decide which beans to create?", "answer": "It looks at the classpath and existing beans. For example if a DataSource class is present it creates a DataSource bean, unless I defined my own one."},
+        {"question": "How would you find and fix a slow SQL query used by your service?", "answer": "I would enable SQL logging, run EXPLAIN on the query and add an index on the columns used in the WHERE clause."},
+        {"question": "How do you secure a Spring Boot REST API?", "answer": "With Spring Security: JWT tokens checked in a filter, and role based access with @PreAuthorize on the endpoints."},
+        {"question": "How do you handle exceptions consistently across controllers?", "answer": "I use a @ControllerAdvice class with @ExceptionHandler methods that return a standard error JSON with a status code."}
+      ]
+    },
+    {
+      "id": "excellent",
+      "experience": "3 years",
+      "turns": [
+        {"question": "Can you describe a REST API you built with Spring Boot and your role in it?", "answer": "I owned the payments API of a banking portal: Spring Boot 3 with a layered design, validation with Bean Validation, idempotency keys so retries never charge twice, and OpenAPI docs. I designed the endpoints, wrote integration tests with Testcontainers for MySQL, and reduced p95 latency from 800 ms to 250 ms by adding pagination and an index on the account and date columns."},
+        {"question": "How does Spring Boot auto-configuration decide which beans to create?", "answer": "Auto-configuration classes are listed in META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports and are evaluated after user configuration. Each one is guarded by conditions such as @ConditionalOnClass, @ConditionalOnMissingBean and @ConditionalOnProperty, so a bean is only created if the library is on the classpath and I have not defined my own. I check the decisions with the conditions report from --debug or the /actuator/conditions endpoint."},
+        {"question": "How would you find and fix a slow SQL query used by your service?", "answer": "First measure: slow query log or APM traces to find the query and its frequency. Then EXPLAIN ANALYZE to see full scans, missing indexes or bad join order. Fixes are usually a composite index matching the WHERE and ORDER BY columns, removing N+1 queries with a join fetch or entity graph, selecting only needed columns, and pagination. I verify with the same measurement before and after, and add a test or monitor so it does not regress."},
+        {"question": "How do you secure a Spring Boot REST API?", "answer": "Spring Security with a stateless SecurityFilterChain: OAuth2 resource server validating JWT signatures, issuer and expiry, scopes mapped to authorities and method security with @PreAuthorize. HTTPS only, CORS restricted to known origins, input validation, rate limiting at the gateway, secrets in a vault instead of properties files, and dependency scanning for vulnerable libraries."},
+        {"question": "How do you handle exceptions consistently across controllers?", "answer": "A @RestControllerAdvice with @ExceptionHandler methods maps domain exceptions to HTTP status codes and returns RFC 7807 ProblemDetail responses with a correlation ID. Validation errors list each invalid field, unexpected errors return a generic 500 without stack traces, and everything is logged once with the correlation ID so support can trace it."}
+      ]
+    }
+  ]
+}

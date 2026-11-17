@@ -1,0 +1,10 @@
+[
+  {
+    "candidate_id": 1,
+    "name": "Jane Doe",
+    "email": "jane.doe@example.com",
+    "phone": "+91-9876543210",
+    "total_experience": 3.5,
+    "skills": ["Java", "Spring Boot", "MySQL", "REST APIs", "Docker"]
+  }
+]
